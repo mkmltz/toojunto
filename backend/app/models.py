@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
@@ -17,11 +18,12 @@ class Grupo(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     nome: Mapped[str] = mapped_column(String(120))
     gestor_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"))
-    valor_cota: Mapped[float] = mapped_column(Numeric(12,2))
+    valor_cota: Mapped[Decimal] = mapped_column(Numeric(12,2))
+    valor_premio: Mapped[Decimal] = mapped_column(Numeric(18,2))
     quantidade_participantes: Mapped[int] = mapped_column(Integer)
     quantidade_ciclos: Mapped[int] = mapped_column(Integer)
-    data_inicio: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    status: Mapped[str] = mapped_column(String(30), default="ATIVO")
+    data_inicio: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="RASCUNHO")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class Participante(Base):
