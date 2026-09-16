@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0F3D25">
+  <title>TooJunto — Protótipo Funcional V0.1</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <button class="brand" onclick="App.go('home')" aria-label="Ir para início">
+        <span class="brand-mark">T</span><span>TooJunto</span>
+      </button>
+      <div class="top-actions">
+        <button class="icon-btn" onclick="App.showHelp()" title="Ajuda">?</button>
+        <button class="avatar" onclick="App.toggleRole()" title="Alternar perfil">MS</button>
+      </div>
+    </header>
+
+    <main id="app" class="main"></main>
+
+    <nav id="bottomNav" class="bottom-nav">
+      <button onclick="App.go('home')" data-nav="home"><span>⌂</span><small>Início</small></button>
+      <button onclick="App.go('groups')" data-nav="groups"><span>▣</span><small>Grupo</small></button>
+      <button onclick="App.go('payments')" data-nav="payments"><span>R$</span><small>Pagamentos</small></button>
+      <button onclick="App.go('history')" data-nav="history"><span>↻</span><small>Histórico</small></button>
+    </nav>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>
