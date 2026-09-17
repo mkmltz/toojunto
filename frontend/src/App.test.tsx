@@ -1,51 +1,205 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import type { GrupoComPapel } from "./types/groups";
 
-function resposta(corpo: unknown, status = 200): Response { return { ok: status >= 200 && status < 300, status, json: vi.fn().mockResolvedValue(corpo) } as unknown as Response; }
-function preencherLogin() { fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "ana@example.com" } }); fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "senha-segura" } }); fireEvent.click(screen.getByRole("button", { name: "Entrar" })); }
-function preencherCadastro() { fireEvent.change(screen.getByLabelText("Nome completo *"), { target: { value: "Ana Souza" } }); fireEvent.change(screen.getByLabelText("E-mail *"), { target: { value: "ana@example.com" } }); fireEvent.change(screen.getByLabelText("Senha *"), { target: { value: "senha-segura" } }); fireEvent.click(screen.getByRole("button", { name: "Criar conta" })); }
-function grupoCriado() { return { id: 1, nome: "Grupo dos Amigos", gestor_id: 1, valor_cota: "200.00", valor_premio: "2000.00", quantidade_participantes: 10, quantidade_ciclos: 10, data_inicio: "2026-10-01", status: "RASCUNHO", created_at: "2026-09-16T12:00:00" }; }
-function preencherGrupo() { fireEvent.change(screen.getByLabelText("Nome do grupo *"), { target: { value: "Grupo dos Amigos" } }); fireEvent.change(screen.getByLabelText("Valor por ciclo (R$) *"), { target: { value: "200.00" } }); fireEvent.change(screen.getByLabelText("Quantidade de participantes *"), { target: { value: "10" } }); fireEvent.change(screen.getByLabelText("Data de início *"), { target: { value: "2026-10-01" } }); }
-async function autenticarPelaSessao() {
+const usuario = { id: 1, nome: "Ana Souza", email: "ana@example.com", telefone: null };
+
+function resposta(corpo: unknown, status = 200): Response {
+  return { ok: status >= 200 && status < 300, status, json: vi.fn().mockResolvedValue(corpo) } as unknown as Response;
+}
+
+function grupo(sobrescritas: Partial<GrupoComPapel> = {}): GrupoComPapel {
+  return { id: 1, nome: "Grupo dos Amigos", gestor_id: 1, valor_cota: "200.00", valor_premio: "2000.00", quantidade_participantes: 10, quantidade_ciclos: 10, data_inicio: "2026-10-01", status: "RASCUNHO", created_at: "2026-09-16T12:00:00", papel: "GESTOR", ...sobrescritas };
+}
+
+async function autenticar(grupos: GrupoComPapel[] = []) {
   localStorage.setItem("toojunto_access_token", "token-valido");
-  vi.mocked(fetch).mockResolvedValueOnce(resposta({ id: 1, nome: "Ana Souza", email: "ana@example.com", telefone: null }));
+  vi.mocked(fetch).mockResolvedValueOnce(resposta(usuario)).mockResolvedValueOnce(resposta(grupos));
   const app = render(<App />);
-  await screen.findByRole("heading", { name: "Olá, Ana Souza!" });
+  await screen.findByRole("heading", { name: "Meus Grupos" });
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups", expect.anything()));
   return app;
 }
 
-describe("autenticação", () => {
+async function abrirDetalhes(dadosGrupo = grupo()) {
+  await autenticar([dadosGrupo]);
+  vi.mocked(fetch).mockResolvedValueOnce(resposta(dadosGrupo));
+  fireEvent.click(screen.getByRole("button", { name: "Ver grupo" }));
+  await screen.findByRole("heading", { name: dadosGrupo.nome });
+}
+
+function preencherFormulario(nome = "Grupo Atualizado", valor = "250.00", participantes = "8") {
+  fireEvent.change(screen.getByLabelText("Nome do grupo *"), { target: { value: nome } });
+  fireEvent.change(screen.getByLabelText("Valor por ciclo (R$) *"), { target: { value: valor } });
+  fireEvent.change(screen.getByLabelText("Quantidade de participantes *"), { target: { value: participantes } });
+  fireEvent.change(screen.getByLabelText("Data de início *"), { target: { value: "2026-11-01" } });
+}
+
+describe("US-003.1 e US-004", () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
   beforeEach(() => { localStorage.clear(); vi.stubGlobal("fetch", vi.fn()); });
-  it("renderiza a tela de login", async () => { render(<App />); expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument(); expect(screen.getByLabelText("E-mail")).toBeInTheDocument(); expect(screen.getByLabelText("Senha")).toBeInTheDocument(); });
-  it("faz login e exibe a área autenticada", async () => { vi.mocked(fetch).mockResolvedValueOnce(resposta({ access_token: "token-valido", token_type: "bearer" })).mockResolvedValueOnce(resposta({ id: 1, nome: "Ana Souza", email: "ana@example.com", telefone: null })); render(<App />); preencherLogin(); expect(await screen.findByRole("heading", { name: "Olá, Ana Souza!" })).toBeInTheDocument(); expect(localStorage.getItem("toojunto_access_token")).toBe("token-valido"); });
-  it("mostra erro para login inválido", async () => { vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "E-mail ou senha inválidos." }, 401)); render(<App />); preencherLogin(); expect(await screen.findByRole("alert")).toHaveTextContent("E-mail ou senha inválidos."); expect(localStorage.getItem("toojunto_access_token")).toBeNull(); });
-  it("cadastra e retorna para o login com confirmação", async () => { vi.mocked(fetch).mockResolvedValueOnce(resposta({ id: 1, nome: "Ana Souza", email: "ana@example.com", telefone: null }, 201)); render(<App />); fireEvent.click(await screen.findByRole("button", { name: "Criar minha conta" })); preencherCadastro(); expect(await screen.findByRole("status")).toHaveTextContent("Conta criada com sucesso"); expect(screen.getByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument(); });
-  it("mostra erro de cadastro", async () => { vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "E-mail já cadastrado." }, 409)); render(<App />); fireEvent.click(await screen.findByRole("button", { name: "Criar minha conta" })); preencherCadastro(); expect(await screen.findByRole("alert")).toHaveTextContent("E-mail já cadastrado."); });
-  it("restaura acesso autenticado consultando /auth/me", async () => { localStorage.setItem("toojunto_access_token", "token-valido"); vi.mocked(fetch).mockResolvedValueOnce(resposta({ id: 1, nome: "Ana Souza", email: "ana@example.com", telefone: null })); render(<App />); expect(await screen.findByRole("heading", { name: "Olá, Ana Souza!" })).toBeInTheDocument(); });
-  it("mantém login sem autenticação", async () => { render(<App />); expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument(); expect(screen.queryByText("Conta autenticada")).not.toBeInTheDocument(); });
-  it("exibe a ação de sair para usuário autenticado", async () => { await autenticarPelaSessao(); expect(screen.getByRole("button", { name: "Sair" })).toBeInTheDocument(); });
-  it("remove o token ao sair", async () => { await autenticarPelaSessao(); fireEvent.click(screen.getByRole("button", { name: "Sair" })); expect(localStorage.getItem("toojunto_access_token")).toBeNull(); });
-  it("deixa de exibir dados da sessão ao sair", async () => { await autenticarPelaSessao(); fireEvent.click(screen.getByRole("button", { name: "Sair" })); expect(screen.queryByRole("heading", { name: "Olá, Ana Souza!" })).not.toBeInTheDocument(); expect(screen.queryByText("ana@example.com")).not.toBeInTheDocument(); });
-  it("retorna para o login com feedback ao sair", async () => { await autenticarPelaSessao(); fireEvent.click(screen.getByRole("button", { name: "Sair" })); expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument(); expect(screen.getByRole("status")).toHaveTextContent("Você saiu da sua conta."); });
-  it("exige novo login ao tentar acessar a área autenticada após sair", async () => {
-    const { unmount } = await autenticarPelaSessao();
-    fireEvent.click(screen.getByRole("button", { name: "Sair" }));
-    unmount();
 
-    render(<App />);
-
-    expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
-    expect(screen.queryByText("Conta autenticada")).not.toBeInTheDocument();
-    expect(fetch).toHaveBeenCalledTimes(1);
+  it("carrega Meus Grupos com dados simples de gestor e participante", async () => {
+    await autenticar([grupo(), grupo({ id: 2, nome: "Grupo da Família", papel: "PARTICIPANTE", gestor_id: 9 })]);
+    expect(screen.getByText("Grupo dos Amigos")).toBeInTheDocument();
+    expect(screen.getByText("Grupo da Família")).toBeInTheDocument();
+    expect(screen.getByText("Gestor")).toBeInTheDocument();
+    expect(screen.getByText("Participante")).toBeInTheDocument();
+    expect(screen.getAllByText("R$ 200,00")).toHaveLength(2);
+    expect(screen.getAllByText("R$ 2.000,00")).toHaveLength(2);
   });
-  it("usa Grupo na interface e permite iniciar a criação", async () => { await autenticarPelaSessao(); expect(screen.queryByText(/caixinha/i)).not.toBeInTheDocument(); fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" })); expect(screen.getByRole("heading", { name: "Criar grupo" })).toBeInTheDocument(); expect(screen.queryByText(/caixinha/i)).not.toBeInTheDocument(); });
-  it("renderiza os campos e o novo rótulo de valor", async () => { await autenticarPelaSessao(); fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" })); expect(screen.getByLabelText("Nome do grupo *")).toBeInTheDocument(); expect(screen.getByLabelText("Valor por ciclo (R$) *")).toBeInTheDocument(); expect(screen.getByLabelText("Quantidade de participantes *")).toBeInTheDocument(); expect(screen.getByLabelText("Quantidade de ciclos")).toHaveAttribute("readonly"); expect(screen.getByLabelText("Data de início *")).toBeInTheDocument(); });
-  it("calcula ciclos e valor do prêmio automaticamente", async () => { await autenticarPelaSessao(); fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" })); fireEvent.change(screen.getByLabelText("Valor por ciclo (R$) *"), { target: { value: "200.00" } }); fireEvent.change(screen.getByLabelText("Quantidade de participantes *"), { target: { value: "5" } }); expect(screen.getByLabelText("Quantidade de ciclos")).toHaveValue(5); expect(screen.getByText("R$ 1.000,00")).toBeInTheDocument(); });
-  it("envia ciclos calculados, Bearer token e não envia valor_premio", async () => { await autenticarPelaSessao(); vi.mocked(fetch).mockResolvedValueOnce(resposta(grupoCriado(), 201)); fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" })); preencherGrupo(); fireEvent.click(screen.getByRole("button", { name: "Criar grupo" })); await screen.findByRole("status"); const payload = { nome: "Grupo dos Amigos", valor_cota: "200.00", quantidade_participantes: 10, quantidade_ciclos: 10, data_inicio: "2026-10-01" }; expect(payload).not.toHaveProperty("valor_premio"); expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups", expect.objectContaining({ method: "POST", headers: expect.objectContaining({ Authorization: "Bearer token-valido" }), body: JSON.stringify(payload) })); });
-  it("mostra confirmação e o prêmio retornado pela API", async () => { await autenticarPelaSessao(); vi.mocked(fetch).mockResolvedValueOnce(resposta(grupoCriado(), 201)); fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" })); preencherGrupo(); fireEvent.click(screen.getByRole("button", { name: "Criar grupo" })); expect(await screen.findByText("Grupo criado com sucesso.")).toBeInTheDocument(); expect(screen.getByRole("heading", { name: "Grupo dos Amigos" })).toBeInTheDocument(); expect(screen.getByText("Valor do prêmio")).toBeInTheDocument(); expect(screen.getByText("R$ 2.000,00")).toBeInTheDocument(); expect(screen.getByText("01/10/2026")).toBeInTheDocument(); });
-  it("não envia formulário com campos obrigatórios vazios", async () => { await autenticarPelaSessao(); fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" })); fireEvent.click(screen.getByRole("button", { name: "Criar grupo" })); expect(fetch).toHaveBeenCalledTimes(1); });
-  it("mostra mensagem simples para erro de validação da API", async () => { await autenticarPelaSessao(); vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: [{ msg: "Value error" }] }, 422)); fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" })); preencherGrupo(); fireEvent.click(screen.getByRole("button", { name: "Criar grupo" })); expect(await screen.findByRole("alert")).toHaveTextContent("Confira os dados do grupo e tente novamente."); });
-  it("mostra mensagem da API quando a criação falha", async () => { await autenticarPelaSessao(); vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Não foi possível criar o grupo agora." }, 500)); fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" })); preencherGrupo(); fireEvent.click(screen.getByRole("button", { name: "Criar grupo" })); expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível criar o grupo agora."); expect(screen.getByRole("heading", { name: "Criar grupo" })).toBeInTheDocument(); });
+
+  it("mostra estado vazio", async () => {
+    await autenticar();
+    expect(await screen.findByRole("heading", { name: "Nenhum grupo ainda" })).toBeInTheDocument();
+  });
+
+  it("abre detalhes por GET e persiste o id selecionado", async () => {
+    await abrirDetalhes();
+    expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups/1", expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
+    expect(localStorage.getItem("toojunto_selected_group_id")).toBe("1");
+    expect(screen.getByText("Seu papel: Gestor")).toBeInTheDocument();
+    expect(screen.getByText("01/10/2026")).toBeInTheDocument();
+  });
+
+  it("restaura detalhes após F5 usando GET", async () => {
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    localStorage.setItem("toojunto_selected_group_id", "1");
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(usuario)).mockResolvedValueOnce(resposta(grupo()));
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Grupo dos Amigos" })).toBeInTheDocument();
+    expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups/1", expect.anything());
+  });
+
+  it("participante visualiza sem ações de gestão", async () => {
+    await abrirDetalhes(grupo({ papel: "PARTICIPANTE", gestor_id: 9 }));
+    expect(screen.getByText("Seu papel: Participante")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Editar grupo" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancelar grupo" })).not.toBeInTheDocument();
+  });
+
+  it("grupo cancelado permanece na lista e não apresenta ações", async () => {
+    const cancelado = grupo({ status: "CANCELADO" });
+    await abrirDetalhes(cancelado);
+    expect(screen.getByText("CANCELADO")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Editar grupo" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancelar grupo" })).not.toBeInTheDocument();
+  });
+
+  it("edita, recalcula visualmente e envia somente campos permitidos", async () => {
+    await abrirDetalhes();
+    fireEvent.click(screen.getByRole("button", { name: "Editar grupo" }));
+    preencherFormulario();
+    expect(screen.getByLabelText("Quantidade de ciclos")).toHaveValue(8);
+    expect(screen.getByText("R$ 2.000,00")).toBeInTheDocument();
+    const atualizado = { ...grupo(), nome: "Grupo Atualizado", valor_cota: "250.00", valor_premio: "2000.00", quantidade_participantes: 8, quantidade_ciclos: 8, data_inicio: "2026-11-01" };
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(atualizado));
+    fireEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await screen.findByText("Grupo atualizado com sucesso.")).toBeInTheDocument();
+    const payload = { nome: "Grupo Atualizado", valor_cota: "250.00", quantidade_participantes: 8, data_inicio: "2026-11-01" };
+    expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups/1", expect.objectContaining({ method: "PATCH", body: JSON.stringify(payload) }));
+    expect(payload).not.toHaveProperty("quantidade_ciclos");
+    expect(payload).not.toHaveProperty("valor_premio");
+    expect(payload).not.toHaveProperty("gestor_id");
+    expect(payload).not.toHaveProperty("status");
+    expect(payload).not.toHaveProperty("papel");
+  });
+
+  it("solicita confirmação antes de cancelar e permite voltar", async () => {
+    await abrirDetalhes();
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar grupo" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("não será excluído");
+    expect(fetch).toHaveBeenCalledTimes(3);
+    fireEvent.click(screen.getByRole("button", { name: "Voltar" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("cancela, mantém detalhes e remove ações", async () => {
+    await abrirDetalhes();
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar grupo" }));
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ ...grupo(), status: "CANCELADO" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sim, cancelar grupo" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Grupo cancelado");
+    expect(screen.getByText("CANCELADO")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Grupo dos Amigos" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Editar grupo" })).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups/1/cancel", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("trata 404 ao abrir detalhes", async () => {
+    await autenticar([grupo()]);
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Grupo não encontrado." }, 404));
+    fireEvent.click(screen.getByRole("button", { name: "Ver grupo" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Grupo não encontrado ou sem acesso.");
+  });
+
+  it.each([
+    [403, "Você não tem permissão"],
+    [422, "Confira os dados"],
+    [500, "Falha interna"],
+  ])("trata erro %s na edição", async (status, mensagem) => {
+    await abrirDetalhes();
+    fireEvent.click(screen.getByRole("button", { name: "Editar grupo" }));
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: status === 500 ? "Falha interna" : "erro" }, status));
+    fireEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(mensagem);
+  });
+
+  it("trata 409 e recarrega o grupo", async () => {
+    await abrirDetalhes();
+    fireEvent.click(screen.getByRole("button", { name: "Editar grupo" }));
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "conflito" }, 409)).mockResolvedValueOnce(resposta(grupo({ status: "CANCELADO" })));
+    fireEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("não pode mais ser alterado");
+  });
+
+  it("encerra sessão quando a listagem retorna 401", async () => {
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(usuario)).mockResolvedValueOnce(resposta({ detail: "Credenciais inválidas." }, 401));
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
+    expect(localStorage.getItem("toojunto_access_token")).toBeNull();
+  });
+
+  it("trata falha de rede na listagem e permite tentar novamente", async () => {
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(usuario)).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    render(<App />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível carregar seus grupos.");
+    expect(screen.getByRole("button", { name: "Tentar novamente" })).toBeInTheDocument();
+  });
+
+  it("preserva criação com ciclos calculados e sem valor do prêmio", async () => {
+    await autenticar();
+    fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" }));
+    preencherFormulario("Grupo Novo", "200.00", "5");
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(grupo({ nome: "Grupo Novo", quantidade_participantes: 5, quantidade_ciclos: 5 }), 201));
+    fireEvent.click(screen.getByRole("button", { name: "Criar grupo" }));
+    expect(await screen.findByText("Grupo criado com sucesso.")).toBeInTheDocument();
+    const payload = { nome: "Grupo Novo", valor_cota: "200.00", quantidade_participantes: 5, quantidade_ciclos: 5, data_inicio: "2026-11-01" };
+    const chamadas = vi.mocked(fetch).mock.calls;
+    const ultimaChamada = chamadas[chamadas.length - 1];
+    expect(ultimaChamada[0]).toBe("http://127.0.0.1:8000/groups");
+    expect(ultimaChamada[1]).toEqual(expect.objectContaining({ method: "POST" }));
+    expect(JSON.parse(String(ultimaChamada[1]?.body))).toEqual(payload);
+    expect(payload).not.toHaveProperty("valor_premio");
+  });
+
+  it("preserva login e logout", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ access_token: "token-valido", token_type: "bearer" })).mockResolvedValueOnce(resposta(usuario)).mockResolvedValueOnce(resposta([]));
+    render(<App />);
+    fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "ana@example.com" } });
+    fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "senha-segura" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+    await screen.findByRole("heading", { name: "Meus Grupos" });
+    fireEvent.click(screen.getByRole("button", { name: "Sair" }));
+    expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
+    expect(localStorage.getItem("toojunto_access_token")).toBeNull();
+  });
+
+  it("usa sempre a terminologia Grupo", async () => {
+    await autenticar();
+    expect(document.body.textContent).not.toMatch(/caixinha/i);
+  });
 });

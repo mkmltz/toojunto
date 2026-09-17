@@ -4,14 +4,48 @@ from sqlalchemy.orm import Session
 from ..auth.dependencies import get_current_user
 from ..db import get_db
 from ..models import Usuario
-from .schemas import GrupoCriacao, GrupoResposta
-from .service import criar_grupo
+from .schemas import (
+    GrupoAtualizacao,
+    GrupoComPapelResposta,
+    GrupoCriacao,
+    GrupoResposta,
+)
+from .service import (
+    atualizar_grupo,
+    cancelar_grupo,
+    criar_grupo,
+    listar_grupos_do_usuario,
+    obter_grupo_do_usuario,
+)
 
 
 router = APIRouter(
     prefix="/groups",
     tags=["Grupos"],
 )
+
+
+@router.get(
+    "",
+    response_model=list[GrupoComPapelResposta],
+)
+def listar_grupos(
+    usuario: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return listar_grupos_do_usuario(usuario, db)
+
+
+@router.get(
+    "/{group_id}",
+    response_model=GrupoComPapelResposta,
+)
+def consultar_grupo(
+    group_id: int,
+    usuario: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return obter_grupo_do_usuario(group_id, usuario, db)
 
 
 @router.post(
@@ -25,3 +59,28 @@ def cadastrar_grupo(
     db: Session = Depends(get_db),
 ):
     return criar_grupo(dados, usuario, db)
+
+
+@router.patch(
+    "/{group_id}",
+    response_model=GrupoResposta,
+)
+def editar_grupo(
+    group_id: int,
+    dados: GrupoAtualizacao,
+    usuario: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return atualizar_grupo(group_id, dados, usuario, db)
+
+
+@router.post(
+    "/{group_id}/cancel",
+    response_model=GrupoResposta,
+)
+def cancelar_grupo_em_rascunho(
+    group_id: int,
+    usuario: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return cancelar_grupo(group_id, usuario, db)

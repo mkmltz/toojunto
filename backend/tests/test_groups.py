@@ -9,8 +9,8 @@ from sqlalchemy import delete, select
 
 from app.auth.security import criar_token_acesso, gerar_hash_senha
 from app.db import SessionLocal
-from app.groups.schemas import GrupoCriacao
-from app.groups.service import criar_grupo
+from app.groups.schemas import GrupoAtualizacao, GrupoCriacao
+from app.groups.service import atualizar_grupo, cancelar_grupo, criar_grupo
 from app.main import app
 from app.models import Grupo, Participante, Usuario
 
@@ -49,6 +49,42 @@ def usuario():
         db.close()
 
 
+@pytest.fixture
+def outro_usuario():
+    db = SessionLocal()
+    novo_usuario = Usuario(
+        nome="Outro usuário de teste",
+        email=f"outro-grupo-{uuid4()}@example.com",
+        senha_hash=gerar_hash_senha("senha-segura"),
+    )
+    db.add(novo_usuario)
+    db.commit()
+    db.refresh(novo_usuario)
+
+    try:
+        yield novo_usuario
+    finally:
+        grupos = db.scalars(
+            select(Grupo).where(Grupo.gestor_id == novo_usuario.id)
+        ).all()
+        ids_grupos = [grupo.id for grupo in grupos]
+        db.execute(
+            delete(Participante).where(
+                Participante.usuario_id == novo_usuario.id
+            )
+        )
+        if ids_grupos:
+            db.execute(
+                delete(Participante).where(
+                    Participante.grupo_id.in_(ids_grupos)
+                )
+            )
+            db.execute(delete(Grupo).where(Grupo.id.in_(ids_grupos)))
+        db.delete(novo_usuario)
+        db.commit()
+        db.close()
+
+
 def cabecalho_autorizacao(usuario: Usuario) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {criar_token_acesso(usuario.id)}"
@@ -65,6 +101,35 @@ def dados_grupo(**sobrescritas):
     }
     dados.update(sobrescritas)
     return dados
+
+
+def criar_grupo_via_api(usuario: Usuario, **sobrescritas) -> dict:
+    response = client.post(
+        "/groups",
+        json=dados_grupo(**sobrescritas),
+        headers=cabecalho_autorizacao(usuario),
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def associar_usuario_ao_grupo(
+    usuario: Usuario,
+    grupo_id: int,
+    status_participante: str = "ATIVO",
+) -> None:
+    db = SessionLocal()
+    try:
+        db.add(
+            Participante(
+                grupo_id=grupo_id,
+                usuario_id=usuario.id,
+                status=status_participante,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
 
 
 def test_participantes_e_ciclos_iguais_sao_aceitos(usuario):
@@ -241,3 +306,485 @@ def test_servico_faz_rollback_quando_persistencia_falha(usuario):
 
     db.rollback.assert_called_once_with()
     db.commit.assert_not_called()
+
+
+def test_gestor_edita_campos_e_backend_recalcula_derivados(usuario):
+    grupo = criar_grupo_via_api(usuario)
+    nova_data = date.today() + timedelta(days=5)
+
+    response = client.patch(
+        f"/groups/{grupo['id']}",
+        json={
+            "nome": "  Caixinha Atualizada  ",
+            "valor_cota": "125.50",
+            "quantidade_participantes": 8,
+            "data_inicio": nova_data.isoformat(),
+        },
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["nome"] == "Caixinha Atualizada"
+    assert response.json()["valor_cota"] == "125.50"
+    assert response.json()["valor_premio"] == "1004.00"
+    assert response.json()["quantidade_participantes"] == 8
+    assert response.json()["quantidade_ciclos"] == 8
+    assert response.json()["data_inicio"] == nova_data.isoformat()
+    assert response.json()["status"] == "RASCUNHO"
+
+
+def test_edicao_parcial_preserva_campos_nao_informados(usuario):
+    grupo = criar_grupo_via_api(usuario)
+
+    response = client.patch(
+        f"/groups/{grupo['id']}",
+        json={"nome": "Novo nome"},
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["nome"] == "Novo nome"
+    assert response.json()["valor_cota"] == grupo["valor_cota"]
+    assert response.json()["valor_premio"] == grupo["valor_premio"]
+    assert response.json()["quantidade_participantes"] == 10
+    assert response.json()["quantidade_ciclos"] == 10
+    assert response.json()["data_inicio"] == grupo["data_inicio"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"nome": None},
+        {"nome": " "},
+        {"valor_cota": "0"},
+        {"valor_cota": "10.001"},
+        {"quantidade_participantes": 1},
+        {"data_inicio": (date.today() - timedelta(days=1)).isoformat()},
+        {"data_inicio": "data-invalida"},
+        {"valor_premio": "1.00"},
+        {"quantidade_ciclos": 4},
+        {"gestor_id": 999},
+        {"status": "ATIVO"},
+        {"campo_desconhecido": "valor"},
+    ],
+)
+def test_edicao_rejeita_payload_invalido_ou_campo_controlado(usuario, payload):
+    grupo = criar_grupo_via_api(usuario)
+
+    response = client.patch(
+        f"/groups/{grupo['id']}",
+        json=payload,
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 422
+
+
+def test_quantidade_nao_pode_ser_menor_que_participantes_associados(usuario):
+    grupo = criar_grupo_via_api(
+        usuario,
+        quantidade_participantes=4,
+        quantidade_ciclos=4,
+    )
+    db = SessionLocal()
+    associados = [
+        Usuario(
+            nome=f"Participante associado {indice}",
+            email=f"associado-{uuid4()}@example.com",
+            senha_hash=gerar_hash_senha("senha-segura"),
+        )
+        for indice in range(2)
+    ]
+    db.add_all(associados)
+    db.flush()
+    db.add_all(
+        [
+        Participante(
+            grupo_id=grupo["id"],
+            usuario_id=associado.id,
+            status="ATIVO",
+        )
+            for associado in associados
+        ]
+    )
+    db.commit()
+
+    try:
+        response = client.patch(
+            f"/groups/{grupo['id']}",
+            json={"quantidade_participantes": 2},
+            headers=cabecalho_autorizacao(usuario),
+        )
+        assert response.status_code == 409
+
+        response = client.patch(
+            f"/groups/{grupo['id']}",
+            json={"quantidade_participantes": 3},
+            headers=cabecalho_autorizacao(usuario),
+        )
+        assert response.status_code == 200
+    finally:
+        db.execute(
+            delete(Participante).where(
+                Participante.usuario_id.in_(
+                    [associado.id for associado in associados]
+                )
+            )
+        )
+        for associado in associados:
+            db.delete(associado)
+        db.commit()
+        db.close()
+
+
+def test_usuario_que_nao_e_gestor_nao_pode_editar_ou_cancelar(usuario):
+    grupo = criar_grupo_via_api(usuario)
+    db = SessionLocal()
+    outro = Usuario(
+        nome="Outro usuário",
+        email=f"outro-{uuid4()}@example.com",
+        senha_hash=gerar_hash_senha("senha-segura"),
+    )
+    db.add(outro)
+    db.commit()
+    db.refresh(outro)
+
+    try:
+        editar = client.patch(
+            f"/groups/{grupo['id']}",
+            json={"nome": "Tentativa indevida"},
+            headers=cabecalho_autorizacao(outro),
+        )
+        cancelar = client.post(
+            f"/groups/{grupo['id']}/cancel",
+            headers=cabecalho_autorizacao(outro),
+        )
+        assert editar.status_code == 403
+        assert cancelar.status_code == 403
+    finally:
+        db.delete(outro)
+        db.commit()
+        db.close()
+
+
+def test_grupo_inexistente_retorna_404_na_edicao_e_cancelamento(usuario):
+    headers = cabecalho_autorizacao(usuario)
+
+    editar = client.patch(
+        "/groups/999999999",
+        json={"nome": "Grupo inexistente"},
+        headers=headers,
+    )
+    cancelar = client.post("/groups/999999999/cancel", headers=headers)
+
+    assert editar.status_code == 404
+    assert cancelar.status_code == 404
+
+
+def test_edicao_e_cancelamento_exigem_autenticacao(usuario):
+    grupo = criar_grupo_via_api(usuario)
+
+    editar = client.patch(
+        f"/groups/{grupo['id']}",
+        json={"nome": "Sem autenticação"},
+    )
+    cancelar = client.post(f"/groups/{grupo['id']}/cancel")
+
+    assert editar.status_code == 401
+    assert cancelar.status_code == 401
+
+
+def test_cancelamento_e_logico_e_retorna_grupo_atualizado(usuario):
+    grupo = criar_grupo_via_api(usuario)
+
+    response = client.post(
+        f"/groups/{grupo['id']}/cancel",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "CANCELADO"
+    db = SessionLocal()
+    try:
+        persistido = db.get(Grupo, grupo["id"])
+        participante = db.scalar(
+            select(Participante).where(Participante.grupo_id == grupo["id"])
+        )
+        assert persistido is not None
+        assert persistido.status == "CANCELADO"
+        assert participante is not None
+    finally:
+        db.close()
+
+
+def test_grupo_cancelado_nao_pode_ser_editado_nem_cancelado_novamente(usuario):
+    grupo = criar_grupo_via_api(usuario)
+    headers = cabecalho_autorizacao(usuario)
+    primeira_resposta = client.post(
+        f"/groups/{grupo['id']}/cancel",
+        headers=headers,
+    )
+    assert primeira_resposta.status_code == 200
+
+    editar = client.patch(
+        f"/groups/{grupo['id']}",
+        json={"nome": "Não permitido"},
+        headers=headers,
+    )
+    cancelar = client.post(f"/groups/{grupo['id']}/cancel", headers=headers)
+
+    assert editar.status_code == 409
+    assert cancelar.status_code == 409
+
+
+def test_atualizacao_faz_rollback_quando_persistencia_falha(usuario, monkeypatch):
+    grupo = Grupo(
+        id=123,
+        nome="Grupo",
+        gestor_id=usuario.id,
+        valor_cota=Decimal("100.00"),
+        valor_premio=Decimal("200.00"),
+        quantidade_participantes=2,
+        quantidade_ciclos=2,
+        data_inicio=date.today(),
+        status="RASCUNHO",
+    )
+    db = MagicMock()
+    db.scalar.return_value = 1
+    db.commit.side_effect = RuntimeError("falha de persistência")
+    monkeypatch.setattr(
+        "app.groups.service._buscar_grupo_gerenciavel",
+        lambda *_: grupo,
+    )
+
+    with pytest.raises(RuntimeError, match="falha de persistência"):
+        atualizar_grupo(
+            grupo.id,
+            GrupoAtualizacao(nome="Nome atualizado"),
+            usuario,
+            db,
+        )
+
+    db.rollback.assert_called_once_with()
+
+
+def test_cancelamento_faz_rollback_quando_persistencia_falha(usuario, monkeypatch):
+    grupo = Grupo(
+        id=123,
+        nome="Grupo",
+        gestor_id=usuario.id,
+        valor_cota=Decimal("100.00"),
+        valor_premio=Decimal("200.00"),
+        quantidade_participantes=2,
+        quantidade_ciclos=2,
+        data_inicio=date.today(),
+        status="RASCUNHO",
+    )
+    db = MagicMock()
+    db.commit.side_effect = RuntimeError("falha de persistência")
+    monkeypatch.setattr(
+        "app.groups.service._buscar_grupo_gerenciavel",
+        lambda *_: grupo,
+    )
+
+    with pytest.raises(RuntimeError, match="falha de persistência"):
+        cancelar_grupo(grupo.id, usuario, db)
+
+    db.rollback.assert_called_once_with()
+
+
+def test_listagem_retorna_grupo_do_gestor_com_papel_gestor(usuario):
+    grupo = criar_grupo_via_api(usuario)
+
+    response = client.get(
+        "/groups",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            **grupo,
+            "papel": "GESTOR",
+        }
+    ]
+
+
+def test_listagem_retorna_grupo_associado_com_papel_participante(
+    usuario,
+    outro_usuario,
+):
+    grupo = criar_grupo_via_api(usuario)
+    associar_usuario_ao_grupo(outro_usuario, grupo["id"])
+
+    response = client.get(
+        "/groups",
+        headers=cabecalho_autorizacao(outro_usuario),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            **grupo,
+            "papel": "PARTICIPANTE",
+        }
+    ]
+
+
+def test_listagem_nao_retorna_grupo_sem_participacao_ativa(
+    usuario,
+    outro_usuario,
+):
+    grupo = criar_grupo_via_api(usuario)
+    associar_usuario_ao_grupo(
+        outro_usuario,
+        grupo["id"],
+        status_participante="INATIVO",
+    )
+
+    response = client.get(
+        "/groups",
+        headers=cabecalho_autorizacao(outro_usuario),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_listagem_nao_duplica_grupo_com_associacoes_ativas_repetidas(
+    usuario,
+    outro_usuario,
+):
+    grupo = criar_grupo_via_api(usuario)
+    associar_usuario_ao_grupo(outro_usuario, grupo["id"])
+    associar_usuario_ao_grupo(outro_usuario, grupo["id"])
+
+    response = client.get(
+        "/groups",
+        headers=cabecalho_autorizacao(outro_usuario),
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert response.json()[0]["id"] == grupo["id"]
+
+
+def test_listagem_inclui_grupo_cancelado(usuario):
+    grupo = criar_grupo_via_api(usuario)
+    cancelar = client.post(
+        f"/groups/{grupo['id']}/cancel",
+        headers=cabecalho_autorizacao(usuario),
+    )
+    assert cancelar.status_code == 200
+
+    response = client.get(
+        "/groups",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert response.json()[0]["id"] == grupo["id"]
+    assert response.json()[0]["status"] == "CANCELADO"
+
+
+def test_listagem_ordena_por_criacao_e_id_decrescentes(usuario):
+    primeiro = criar_grupo_via_api(usuario, nome="Primeiro grupo")
+    segundo = criar_grupo_via_api(usuario, nome="Segundo grupo")
+    db = SessionLocal()
+    try:
+        grupo_primeiro = db.get(Grupo, primeiro["id"])
+        grupo_segundo = db.get(Grupo, segundo["id"])
+        grupo_segundo.created_at = grupo_primeiro.created_at
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get(
+        "/groups",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert [grupo["id"] for grupo in response.json()] == [
+        segundo["id"],
+        primeiro["id"],
+    ]
+
+
+def test_detalhe_retorna_papel_gestor_para_proprietario(usuario):
+    grupo = criar_grupo_via_api(usuario)
+
+    response = client.get(
+        f"/groups/{grupo['id']}",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {**grupo, "papel": "GESTOR"}
+
+
+def test_detalhe_retorna_papel_participante_para_associado_ativo(
+    usuario,
+    outro_usuario,
+):
+    grupo = criar_grupo_via_api(usuario)
+    associar_usuario_ao_grupo(outro_usuario, grupo["id"])
+
+    response = client.get(
+        f"/groups/{grupo['id']}",
+        headers=cabecalho_autorizacao(outro_usuario),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {**grupo, "papel": "PARTICIPANTE"}
+
+
+def test_detalhe_retorna_404_para_usuario_externo_ou_inativo(
+    usuario,
+    outro_usuario,
+):
+    grupo = criar_grupo_via_api(usuario)
+
+    externo = client.get(
+        f"/groups/{grupo['id']}",
+        headers=cabecalho_autorizacao(outro_usuario),
+    )
+    associar_usuario_ao_grupo(
+        outro_usuario,
+        grupo["id"],
+        status_participante="INATIVO",
+    )
+    inativo = client.get(
+        f"/groups/{grupo['id']}",
+        headers=cabecalho_autorizacao(outro_usuario),
+    )
+
+    assert externo.status_code == 404
+    assert inativo.status_code == 404
+
+
+def test_detalhe_retorna_404_para_grupo_inexistente(usuario):
+    response = client.get(
+        "/groups/999999999",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize("caminho", ["/groups", "/groups/1"])
+def test_consultas_de_grupo_exigem_autenticacao(caminho):
+    response = client.get(caminho)
+
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize("caminho", ["/groups", "/groups/1"])
+def test_consultas_de_grupo_rejeitam_token_invalido(caminho):
+    response = client.get(
+        caminho,
+        headers={"Authorization": "Bearer token-invalido"},
+    )
+
+    assert response.status_code == 401

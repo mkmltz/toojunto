@@ -6,6 +6,16 @@ export interface GrupoCriacaoDados {
   data_inicio: string;
 }
 
+export interface GrupoFormularioDados {
+  nome: string;
+  valor_cota: string;
+  quantidade_participantes: number;
+  data_inicio: string;
+}
+
+export type GrupoAtualizacaoDados = GrupoFormularioDados;
+export type PapelGrupo = "GESTOR" | "PARTICIPANTE";
+
 export interface Grupo {
   id: number;
   nome: string;
@@ -17,4 +27,8 @@ export interface Grupo {
   data_inicio: string;
   status: "RASCUNHO" | string;
   created_at: string;
+}
+
+export interface GrupoComPapel extends Grupo {
+  papel: PapelGrupo;
 }

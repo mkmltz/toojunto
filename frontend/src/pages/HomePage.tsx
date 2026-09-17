@@ -1,3 +1,27 @@
 import { AppShell } from "../components/AppShell";
 import type { Usuario } from "../types/auth";
-export function HomePage({ usuario, onCriarGrupo, onSair }: { usuario: Usuario; onCriarGrupo: () => void; onSair: () => void }) { return <AppShell nome={usuario.nome}><section className="hero"><span className="badge badge-hero">Conta autenticada</span><h1>Seu grupo,<br />organizado e transparente.</h1><p>Você entrou no TooJunto com segurança.</p><button className="btn btn-primary" type="button" onClick={onCriarGrupo}>+ Criar novo grupo</button></section><section className="screen-title"><div><h1>Olá, {usuario.nome}!</h1><p className="subtitle">Vamos continuar de onde paramos.</p></div></section><section className="card"><h2>Seu acesso</h2><div className="profile-row"><div className="person-icon">{usuario.nome.charAt(0).toUpperCase()}</div><div><strong>{usuario.nome}</strong><p className="small">{usuario.email}</p></div></div><p className="alert success">Você está autenticado no TooJunto.</p><button className="btn btn-secondary" type="button" onClick={onSair}>Sair</button></section></AppShell>; }
+import type { GrupoComPapel } from "../types/groups";
+
+const formatarValor = (valor: string) => Number(valor).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const formatarPapel = (papel: GrupoComPapel["papel"]) => papel === "GESTOR" ? "Gestor" : "Participante";
+
+interface HomePageProps {
+  usuario: Usuario;
+  grupos: GrupoComPapel[];
+  carregando: boolean;
+  erro: string;
+  onAbrirGrupo: (grupoId: number) => void;
+  onCriarGrupo: () => void;
+  onRecarregar: () => void;
+  onSair: () => void;
+}
+
+export function HomePage({ usuario, grupos, carregando, erro, onAbrirGrupo, onCriarGrupo, onRecarregar, onSair }: HomePageProps) {
+  return <AppShell nome={usuario.nome}>
+    <section className="screen-title"><div><h1>Meus Grupos</h1><p className="subtitle">Escolha um grupo para ver os detalhes.</p></div></section>
+    {erro && <div className="alert error" role="alert">{erro}<button className="link-button" type="button" onClick={onRecarregar}>Tentar novamente</button></div>}
+    {carregando ? <p className="card center" role="status">Carregando grupos...</p> : grupos.length === 0 ? <section className="card empty-state"><h2>Nenhum grupo ainda</h2><p>Crie seu primeiro grupo para começar.</p></section> : <section className="group-list" aria-label="Meus Grupos">{grupos.map((grupo) => <article className="card group-card" key={grupo.id}><div className="group-card-heading"><h2>{grupo.nome}</h2><span className={`badge ${grupo.status === "CANCELADO" ? "danger" : ""}`}>{grupo.status}</span></div><p className="role-label">{formatarPapel(grupo.papel)}</p><dl><div><dt>Valor por ciclo</dt><dd>{formatarValor(grupo.valor_cota)}</dd></div><div><dt>Valor do prêmio</dt><dd>{formatarValor(grupo.valor_premio)}</dd></div></dl><button className="btn btn-primary" type="button" onClick={() => onAbrirGrupo(grupo.id)}>Ver grupo</button></article>)}</section>}
+    <button className="btn btn-secondary" type="button" onClick={onCriarGrupo}>+ Criar novo grupo</button>
+    <button className="btn btn-quiet" type="button" onClick={onSair}>Sair</button>
+  </AppShell>;
+}
