@@ -5,6 +5,7 @@ from ..auth.dependencies import get_current_user
 from ..db import get_db
 from ..models import Usuario
 from .schemas import (
+    ConviteResposta,
     GrupoAtualizacao,
     GrupoComPapelResposta,
     GrupoCriacao,
@@ -14,6 +15,7 @@ from .service import (
     atualizar_grupo,
     cancelar_grupo,
     criar_grupo,
+    gerar_ou_obter_convite,
     listar_grupos_do_usuario,
     obter_grupo_do_usuario,
 )
@@ -84,3 +86,15 @@ def cancelar_grupo_em_rascunho(
     db: Session = Depends(get_db),
 ):
     return cancelar_grupo(group_id, usuario, db)
+
+
+@router.post(
+    "/{group_id}/invite",
+    response_model=ConviteResposta,
+)
+def criar_ou_consultar_convite(
+    group_id: int,
+    usuario: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return gerar_ou_obter_convite(group_id, usuario, db)

@@ -32,3 +32,11 @@ export interface Grupo {
 export interface GrupoComPapel extends Grupo {
   papel: PapelGrupo;
 }
+
+export interface ConviteGrupo {
+  id: number;
+  group_id: number;
+  token: string;
+  invite_path: string;
+  created_at: string;
+}

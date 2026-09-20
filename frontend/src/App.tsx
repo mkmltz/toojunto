@@ -8,9 +8,9 @@ import { HomePage } from "./pages/HomePage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ApiError, buscarUsuarioAtual, cadastrarUsuario, fazerLogin } from "./services/auth";
-import { atualizarGrupo, buscarGrupo, cancelarGrupo, criarGrupo, listarGrupos } from "./services/groups";
+import { atualizarGrupo, buscarGrupo, cancelarGrupo, criarGrupo, gerarOuObterConvite, listarGrupos } from "./services/groups";
 import type { Usuario } from "./types/auth";
-import type { Grupo, GrupoAtualizacaoDados, GrupoComPapel, GrupoCriacaoDados } from "./types/groups";
+import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoComPapel, GrupoCriacaoDados } from "./types/groups";
 
 const CHAVE_TOKEN = "toojunto_access_token";
 const CHAVE_GRUPO = "toojunto_selected_group_id";
@@ -193,6 +193,30 @@ export default function App() {
     } finally { setEnviando(false); }
   }
 
+  async function obterConviteSelecionado(): Promise<ConviteGrupo> {
+    if (!grupoSelecionado) throw new Error("O Grupo não está disponível.");
+    const token = localStorage.getItem(CHAVE_TOKEN);
+    if (!token) {
+      encerrarSessao("Entre novamente para convidar pessoas.");
+      throw new Error("Sua sessão terminou.");
+    }
+    try {
+      return await gerarOuObterConvite(grupoSelecionado.id, token);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        encerrarSessao("Sua sessão terminou. Entre novamente para continuar.");
+        throw error;
+      }
+      if (error instanceof ApiError && error.status === 404) {
+        throw new Error("Este Grupo não está disponível.");
+      }
+      if (error instanceof ApiError && error.status === 409) {
+        throw new Error("Este Grupo não permite mais convites.");
+      }
+      throw new Error("Não foi possível obter o convite. Tente novamente.");
+    }
+  }
+
   function voltarParaHome() {
     localStorage.removeItem(CHAVE_GRUPO);
     setGrupoSelecionado(null);
@@ -207,7 +231,7 @@ export default function App() {
   if (usuario && tela === "criar-grupo") return <CreateGroupPage nomeUsuario={usuario.nome} carregando={enviando} onVoltar={voltarParaHome} onCriar={cadastrarGrupo} />;
   if (usuario && tela === "grupo-criado" && grupoCriado) return <GroupCreatedPage nomeUsuario={usuario.nome} grupo={grupoCriado} onVoltar={voltarParaHome} onVerGrupo={() => abrirGrupo(grupoCriado.id)} />;
   if (usuario && tela === "editar-grupo" && grupoSelecionado) return <EditGroupPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} carregando={enviando} onVoltar={() => setTela("detalhes")} onSalvar={atualizarGrupoSelecionado} />;
-  if (usuario && tela === "detalhes" && grupoSelecionado) return <GroupDetailsPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarParaHome} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} />;
+  if (usuario && tela === "detalhes" && grupoSelecionado) return <GroupDetailsPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarParaHome} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} onObterConvite={obterConviteSelecionado} />;
   if (usuario) return <HomePage usuario={usuario} grupos={grupos} carregando={carregandoLista} erro={erroLista || avisoGrupo} onAbrirGrupo={abrirGrupo} onCriarGrupo={() => setTela("criar-grupo")} onRecarregar={carregarGrupos} onSair={sair} />;
   return <AuthLayout>{tela === "login" ? <LoginPage aviso={aviso} carregando={enviando} onEntrar={entrar} onCadastrar={() => { setAviso(""); setTela("cadastro"); }} /> : <RegisterPage carregando={enviando} onVoltar={() => setTela("login")} onCadastrar={cadastrar} />}</AuthLayout>;
 }

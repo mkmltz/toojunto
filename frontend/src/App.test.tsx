@@ -13,6 +13,14 @@ function grupo(sobrescritas: Partial<GrupoComPapel> = {}): GrupoComPapel {
   return { id: 1, nome: "Grupo dos Amigos", gestor_id: 1, valor_cota: "200.00", valor_premio: "2000.00", quantidade_participantes: 10, quantidade_ciclos: 10, data_inicio: "2026-10-01", status: "RASCUNHO", created_at: "2026-09-16T12:00:00", papel: "GESTOR", ...sobrescritas };
 }
 
+const convite = {
+  id: 7,
+  group_id: 1,
+  token: "token-seguro",
+  invite_path: "/invites/token-seguro",
+  created_at: "2026-09-20T12:00:00",
+};
+
 async function autenticar(grupos: GrupoComPapel[] = []) {
   localStorage.setItem("toojunto_access_token", "token-valido");
   vi.mocked(fetch).mockResolvedValueOnce(resposta(usuario)).mockResolvedValueOnce(resposta(grupos));
@@ -201,5 +209,117 @@ describe("US-003.1 e US-004", () => {
   it("usa sempre a terminologia Grupo", async () => {
     await autenticar();
     expect(document.body.textContent).not.toMatch(/caixinha/i);
+  });
+});
+
+describe("US-005", () => {
+  const escreverClipboard = vi.fn().mockResolvedValue(undefined);
+
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  beforeEach(() => {
+    localStorage.clear();
+    vi.stubGlobal("fetch", vi.fn());
+    escreverClipboard.mockClear();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: escreverClipboard },
+    });
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: undefined,
+    });
+  });
+
+  it("mostra Convidar pessoas apenas para Gestor em RASCUNHO", async () => {
+    await abrirDetalhes();
+    expect(screen.getByRole("button", { name: "Convidar pessoas" })).toBeInTheDocument();
+
+    cleanup();
+    localStorage.clear();
+    await abrirDetalhes(grupo({ papel: "PARTICIPANTE", gestor_id: 9 }));
+    expect(screen.queryByRole("button", { name: "Convidar pessoas" })).not.toBeInTheDocument();
+
+    cleanup();
+    localStorage.clear();
+    await abrirDetalhes(grupo({ status: "FORMANDO" }));
+    expect(screen.queryByRole("button", { name: "Convidar pessoas" })).not.toBeInTheDocument();
+  });
+
+  it("solicita o convite por POST e monta o link com a origem atual", async () => {
+    await abrirDetalhes();
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(convite));
+
+    fireEvent.click(screen.getByRole("button", { name: "Convidar pessoas" }));
+
+    const link = `${window.location.origin}/invites/token-seguro`;
+    expect(await screen.findByLabelText("Link do convite")).toHaveTextContent(link);
+    expect(fetch).toHaveBeenLastCalledWith(
+      "http://127.0.0.1:8000/groups/1/invite",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer token-valido" }),
+      }),
+    );
+  });
+
+  it("copia o link completo e apresenta feedback", async () => {
+    await abrirDetalhes();
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(convite));
+    fireEvent.click(screen.getByRole("button", { name: "Convidar pessoas" }));
+    await screen.findByRole("button", { name: "Copiar link" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Copiar link" }));
+
+    await waitFor(() => expect(escreverClipboard).toHaveBeenCalledWith(`${window.location.origin}/invites/token-seguro`));
+    expect(screen.getByRole("status")).toHaveTextContent("Link copiado com sucesso.");
+  });
+
+  it("usa navigator.share com nome do Grupo e link", async () => {
+    const compartilhar = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "share", { configurable: true, value: compartilhar });
+    await abrirDetalhes();
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(convite));
+    fireEvent.click(screen.getByRole("button", { name: "Convidar pessoas" }));
+    await screen.findByRole("button", { name: "Compartilhar convite" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Compartilhar convite" }));
+
+    await waitFor(() => expect(compartilhar).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining("Grupo dos Amigos"),
+      url: `${window.location.origin}/invites/token-seguro`,
+    })));
+    expect(screen.getByRole("status")).toHaveTextContent("Convite compartilhado.");
+  });
+
+  it("copia o link como fallback quando navigator.share não existe", async () => {
+    await abrirDetalhes();
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(convite));
+    fireEvent.click(screen.getByRole("button", { name: "Convidar pessoas" }));
+    await screen.findByRole("button", { name: "Compartilhar convite" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Compartilhar convite" }));
+
+    await waitFor(() => expect(escreverClipboard).toHaveBeenCalledOnce());
+    expect(screen.getByRole("status")).toHaveTextContent("Link copiado com sucesso.");
+  });
+
+  it.each([
+    [404, "Este Grupo não está disponível."],
+    [409, "Este Grupo não permite mais convites."],
+    [500, "Não foi possível obter o convite. Tente novamente."],
+  ])("trata erro %s ao obter convite", async (status, mensagem) => {
+    await abrirDetalhes();
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "erro" }, status));
+    fireEvent.click(screen.getByRole("button", { name: "Convidar pessoas" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(mensagem);
+    expect(screen.getByRole("button", { name: "Convidar pessoas" })).toBeInTheDocument();
+  });
+
+  it("encerra a sessão quando o convite retorna 401", async () => {
+    await abrirDetalhes();
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Credenciais inválidas." }, 401));
+    fireEvent.click(screen.getByRole("button", { name: "Convidar pessoas" }));
+    expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
+    expect(localStorage.getItem("toojunto_access_token")).toBeNull();
   });
 });

@@ -12,7 +12,7 @@ from app.db import SessionLocal
 from app.groups.schemas import GrupoAtualizacao, GrupoCriacao
 from app.groups.service import atualizar_grupo, cancelar_grupo, criar_grupo
 from app.main import app
-from app.models import Grupo, Participante, Usuario
+from app.models import Convite, Grupo, Participante, Usuario
 
 
 client = TestClient(app)
@@ -38,6 +38,7 @@ def usuario():
         ).all()
         ids_grupos = [grupo.id for grupo in grupos]
         if ids_grupos:
+            db.execute(delete(Convite).where(Convite.grupo_id.in_(ids_grupos)))
             db.execute(
                 delete(Participante).where(
                     Participante.grupo_id.in_(ids_grupos)
@@ -74,6 +75,7 @@ def outro_usuario():
             )
         )
         if ids_grupos:
+            db.execute(delete(Convite).where(Convite.grupo_id.in_(ids_grupos)))
             db.execute(
                 delete(Participante).where(
                     Participante.grupo_id.in_(ids_grupos)

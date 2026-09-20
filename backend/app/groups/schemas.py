@@ -101,3 +101,13 @@ class PapelGrupo(str, Enum):
 
 class GrupoComPapelResposta(GrupoResposta):
     papel: PapelGrupo
+
+
+class ConviteResposta(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    group_id: int
+    token: str
+    invite_path: str
+    created_at: datetime

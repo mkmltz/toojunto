@@ -26,6 +26,15 @@ class Grupo(Base):
     status: Mapped[str] = mapped_column(String(30), default="RASCUNHO")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+class Convite(Base):
+    __tablename__ = "convites"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    grupo_id: Mapped[int] = mapped_column(
+        ForeignKey("grupos.id"), unique=True, index=True
+    )
+    token: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
 class Participante(Base):
     __tablename__ = "participantes"
     id: Mapped[int] = mapped_column(primary_key=True)

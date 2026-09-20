@@ -1,11 +1,14 @@
+import secrets
 from datetime import datetime, time
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..models import Grupo, Participante, Usuario
+from ..models import Convite, Grupo, Participante, Usuario
 from .schemas import (
+    ConviteResposta,
     GrupoAtualizacao,
     GrupoComPapelResposta,
     GrupoCriacao,
@@ -211,3 +214,64 @@ def cancelar_grupo(
         raise
 
     return grupo
+
+
+def gerar_ou_obter_convite(
+    grupo_id: int,
+    gestor: Usuario,
+    db: Session,
+) -> ConviteResposta:
+    grupo = db.scalar(
+        select(Grupo)
+        .where(
+            Grupo.id == grupo_id,
+            Grupo.gestor_id == gestor.id,
+        )
+        .with_for_update()
+    )
+    if grupo is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Grupo não encontrado.",
+        )
+
+    if grupo.status != "RASCUNHO":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Somente grupos em RASCUNHO podem ser gerenciados.",
+        )
+
+    convite = db.scalar(
+        select(Convite).where(Convite.grupo_id == grupo.id)
+    )
+
+    if convite is None:
+        while convite is None:
+            candidato = Convite(
+                grupo_id=grupo.id,
+                token=secrets.token_urlsafe(32),
+            )
+            try:
+                with db.begin_nested():
+                    db.add(candidato)
+                    db.flush()
+                convite = candidato
+            except IntegrityError:
+                convite = db.scalar(
+                    select(Convite).where(Convite.grupo_id == grupo.id)
+                )
+
+        try:
+            db.commit()
+            db.refresh(convite)
+        except Exception:
+            db.rollback()
+            raise
+
+    return ConviteResposta(
+        id=convite.id,
+        group_id=convite.grupo_id,
+        token=convite.token,
+        invite_path=f"/invites/{convite.token}",
+        created_at=convite.created_at,
+    )

@@ -1,5 +1,5 @@
 import { requisicao } from "./auth";
-import type { Grupo, GrupoAtualizacaoDados, GrupoComPapel, GrupoCriacaoDados } from "../types/groups";
+import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoComPapel, GrupoCriacaoDados } from "../types/groups";
 
 export const criarGrupo = (dados: GrupoCriacaoDados, token: string) =>
   requisicao<Grupo>("/groups", {
@@ -23,6 +23,11 @@ export const atualizarGrupo = (grupoId: number, dados: GrupoAtualizacaoDados, to
 });
 
 export const cancelarGrupo = (grupoId: number, token: string) => requisicao<Grupo>(`/groups/${grupoId}/cancel`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${token}` },
+});
+
+export const gerarOuObterConvite = (grupoId: number, token: string) => requisicao<ConviteGrupo>(`/groups/${grupoId}/invite`, {
   method: "POST",
   headers: { Authorization: `Bearer ${token}` },
 });
