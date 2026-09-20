@@ -1,7 +1,7 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import type { GrupoComPapel } from "./types/groups";
+import type { GrupoComPapel, GrupoDetalhe } from "./types/groups";
 
 const usuario = { id: 1, nome: "Ana Souza", email: "ana@example.com", telefone: null };
 
@@ -9,8 +9,8 @@ function resposta(corpo: unknown, status = 200): Response {
   return { ok: status >= 200 && status < 300, status, json: vi.fn().mockResolvedValue(corpo) } as unknown as Response;
 }
 
-function grupo(sobrescritas: Partial<GrupoComPapel> = {}): GrupoComPapel {
-  return { id: 1, nome: "Grupo dos Amigos", gestor_id: 1, valor_cota: "200.00", valor_premio: "2000.00", quantidade_participantes: 10, quantidade_ciclos: 10, data_inicio: "2026-10-01", status: "RASCUNHO", created_at: "2026-09-16T12:00:00", papel: "GESTOR", ...sobrescritas };
+function grupo(sobrescritas: Partial<GrupoDetalhe> = {}): GrupoDetalhe {
+  return { id: 1, nome: "Grupo dos Amigos", gestor_id: 1, valor_cota: "200.00", valor_premio: "2000.00", quantidade_participantes: 10, quantidade_ciclos: 10, data_inicio: "2026-10-01", status: "RASCUNHO", created_at: "2026-09-16T12:00:00", papel: "GESTOR", formacao: { quantidade_atual: 2, limite: 10, vagas_disponiveis: 8, participantes: [{ nome: "Ana Souza", papel: "GESTOR" }, { nome: "Bruno Lima", papel: "PARTICIPANTE" }] }, ...sobrescritas };
 }
 
 const convite = {
@@ -101,12 +101,13 @@ describe("US-003.1 e US-004", () => {
     preencherFormulario();
     expect(screen.getByLabelText("Quantidade de ciclos")).toHaveValue(8);
     expect(screen.getByText("R$ 2.000,00")).toBeInTheDocument();
-    const atualizado = { ...grupo(), nome: "Grupo Atualizado", valor_cota: "250.00", valor_premio: "2000.00", quantidade_participantes: 8, quantidade_ciclos: 8, data_inicio: "2026-11-01" };
-    vi.mocked(fetch).mockResolvedValueOnce(resposta(atualizado));
+    const atualizado = { ...grupo(), nome: "Grupo Atualizado", valor_cota: "250.00", valor_premio: "2000.00", quantidade_participantes: 8, quantidade_ciclos: 8, data_inicio: "2026-11-01", formacao: { ...grupo().formacao, limite: 8, vagas_disponiveis: 6 } };
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(atualizado)).mockResolvedValueOnce(resposta(atualizado));
     fireEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
     expect(await screen.findByText("Grupo atualizado com sucesso.")).toBeInTheDocument();
+    expect(screen.getByText("2 de 8 pessoas")).toBeInTheDocument();
     const payload = { nome: "Grupo Atualizado", valor_cota: "250.00", quantidade_participantes: 8, data_inicio: "2026-11-01" };
-    expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups/1", expect.objectContaining({ method: "PATCH", body: JSON.stringify(payload) }));
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1", expect.objectContaining({ method: "PATCH", body: JSON.stringify(payload) }));
     expect(payload).not.toHaveProperty("quantidade_ciclos");
     expect(payload).not.toHaveProperty("valor_premio");
     expect(payload).not.toHaveProperty("gestor_id");
@@ -209,6 +210,66 @@ describe("US-003.1 e US-004", () => {
   it("usa sempre a terminologia Grupo", async () => {
     await autenticar();
     expect(document.body.textContent).not.toMatch(/caixinha/i);
+  });
+});
+
+describe("US-007", () => {
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  beforeEach(() => { localStorage.clear(); vi.stubGlobal("fetch", vi.fn()); });
+
+  it("renderiza a formação e os papéis usando os dados do Backend", async () => {
+    await abrirDetalhes();
+
+    const formacao = screen.getByRole("region", { name: "Participantes" });
+    expect(within(formacao).getByText("2 de 10 pessoas")).toBeInTheDocument();
+    expect(within(formacao).getByText("Ana Souza")).toBeInTheDocument();
+    expect(within(formacao).getByText("Gestor")).toBeInTheDocument();
+    expect(within(formacao).getByText("Bruno Lima")).toBeInTheDocument();
+    expect(within(formacao).getByText("Participante")).toBeInTheDocument();
+    expect(within(formacao).getByText("Faltam 8 pessoas para completar o Grupo.")).toBeInTheDocument();
+  });
+
+  it("trata uma vaga restante no singular", async () => {
+    await abrirDetalhes(grupo({
+      formacao: {
+        quantidade_atual: 9,
+        limite: 10,
+        vagas_disponiveis: 1,
+        participantes: [{ nome: "Ana Souza", papel: "GESTOR" }],
+      },
+    }));
+
+    expect(screen.getByText("Falta 1 pessoa para completar o Grupo.")).toBeInTheDocument();
+  });
+
+  it("informa quando o Grupo está completo", async () => {
+    await abrirDetalhes(grupo({
+      formacao: {
+        quantidade_atual: 10,
+        limite: 10,
+        vagas_disponiveis: 0,
+        participantes: [{ nome: "Ana Souza", papel: "GESTOR" }],
+      },
+    }));
+
+    expect(screen.getByText("Grupo completo.")).toBeInTheDocument();
+  });
+
+  it("mantém as ações do Gestor", async () => {
+    await abrirDetalhes();
+
+    expect(screen.getByRole("button", { name: "Convidar pessoas" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Editar grupo" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancelar grupo" })).toBeInTheDocument();
+  });
+
+  it("não oferece ações de Gestor ao Participante", async () => {
+    await abrirDetalhes(grupo({ papel: "PARTICIPANTE", gestor_id: 9 }));
+
+    expect(screen.getByRole("region", { name: "Participantes" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Convidar pessoas" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Editar grupo" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancelar grupo" })).not.toBeInTheDocument();
   });
 });
 

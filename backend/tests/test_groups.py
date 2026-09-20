@@ -723,7 +723,18 @@ def test_detalhe_retorna_papel_gestor_para_proprietario(usuario):
     )
 
     assert response.status_code == 200
-    assert response.json() == {**grupo, "papel": "GESTOR"}
+    assert response.json() == {
+        **grupo,
+        "papel": "GESTOR",
+        "formacao": {
+            "quantidade_atual": 1,
+            "limite": 10,
+            "vagas_disponiveis": 9,
+            "participantes": [
+                {"nome": usuario.nome, "papel": "GESTOR"},
+            ],
+        },
+    }
 
 
 def test_detalhe_retorna_papel_participante_para_associado_ativo(
@@ -739,7 +750,72 @@ def test_detalhe_retorna_papel_participante_para_associado_ativo(
     )
 
     assert response.status_code == 200
-    assert response.json() == {**grupo, "papel": "PARTICIPANTE"}
+    assert response.json() == {
+        **grupo,
+        "papel": "PARTICIPANTE",
+        "formacao": {
+            "quantidade_atual": 2,
+            "limite": 10,
+            "vagas_disponiveis": 8,
+            "participantes": [
+                {"nome": usuario.nome, "papel": "GESTOR"},
+                {
+                    "nome": outro_usuario.nome,
+                    "papel": "PARTICIPANTE",
+                },
+            ],
+        },
+    }
+
+
+def test_detalhe_contabiliza_associacao_inativa_na_formacao(
+    usuario,
+    outro_usuario,
+):
+    grupo = criar_grupo_via_api(usuario)
+    associar_usuario_ao_grupo(
+        outro_usuario,
+        grupo["id"],
+        status_participante="INATIVO",
+    )
+
+    response = client.get(
+        f"/groups/{grupo['id']}",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["formacao"] == {
+        "quantidade_atual": 2,
+        "limite": 10,
+        "vagas_disponiveis": 8,
+        "participantes": [
+            {"nome": usuario.nome, "papel": "GESTOR"},
+            {"nome": outro_usuario.nome, "papel": "PARTICIPANTE"},
+        ],
+    }
+
+
+def test_detalhe_de_grupo_completo_retorna_zero_vagas(
+    usuario,
+    outro_usuario,
+):
+    grupo = criar_grupo_via_api(
+        usuario,
+        quantidade_participantes=2,
+        quantidade_ciclos=2,
+    )
+    associar_usuario_ao_grupo(outro_usuario, grupo["id"])
+
+    response = client.get(
+        f"/groups/{grupo['id']}",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["formacao"]["quantidade_atual"] == 2
+    assert response.json()["formacao"]["limite"] == 2
+    assert response.json()["formacao"]["vagas_disponiveis"] == 0
 
 
 def test_detalhe_retorna_404_para_usuario_externo_ou_inativo(

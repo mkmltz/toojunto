@@ -103,6 +103,22 @@ class GrupoComPapelResposta(GrupoResposta):
     papel: PapelGrupo
 
 
+class IntegranteGrupoResposta(BaseModel):
+    nome: str
+    papel: PapelGrupo
+
+
+class FormacaoGrupoResposta(BaseModel):
+    quantidade_atual: int
+    limite: int
+    vagas_disponiveis: int
+    participantes: list[IntegranteGrupoResposta]
+
+
+class GrupoDetalheResposta(GrupoComPapelResposta):
+    formacao: FormacaoGrupoResposta
+
+
 class ConviteResposta(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

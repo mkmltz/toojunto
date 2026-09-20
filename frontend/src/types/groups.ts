@@ -33,6 +33,22 @@ export interface GrupoComPapel extends Grupo {
   papel: PapelGrupo;
 }
 
+export interface IntegranteGrupo {
+  nome: string;
+  papel: PapelGrupo;
+}
+
+export interface FormacaoGrupo {
+  quantidade_atual: number;
+  limite: number;
+  vagas_disponiveis: number;
+  participantes: IntegranteGrupo[];
+}
+
+export interface GrupoDetalhe extends GrupoComPapel {
+  formacao: FormacaoGrupo;
+}
+
 export interface ConviteGrupo {
   id: number;
   group_id: number;

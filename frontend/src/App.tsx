@@ -12,7 +12,7 @@ import { ApiError, buscarUsuarioAtual, cadastrarUsuario, fazerLogin } from "./se
 import { atualizarGrupo, buscarGrupo, cancelarGrupo, criarGrupo, gerarOuObterConvite, listarGrupos } from "./services/groups";
 import { aceitarConvite, consultarConvite } from "./services/invites";
 import type { Usuario } from "./types/auth";
-import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoComPapel, GrupoCriacaoDados } from "./types/groups";
+import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoComPapel, GrupoCriacaoDados, GrupoDetalhe } from "./types/groups";
 import type { AceiteConvite, ConvitePublico } from "./types/invites";
 
 const CHAVE_TOKEN = "toojunto_access_token";
@@ -46,7 +46,7 @@ export default function App() {
   const [tela, setTela] = useState<Tela>(() => conviteToken ? "convite" : "login");
   const [usuario, setUsuario] = useState<Usuario | null>(null);
   const [grupos, setGrupos] = useState<GrupoComPapel[]>([]);
-  const [grupoSelecionado, setGrupoSelecionado] = useState<GrupoComPapel | null>(null);
+  const [grupoSelecionado, setGrupoSelecionado] = useState<GrupoDetalhe | null>(null);
   const [grupoCriado, setGrupoCriado] = useState<Grupo | null>(null);
   const [carregandoSessao, setCarregandoSessao] = useState(true);
   const [carregandoLista, setCarregandoLista] = useState(false);
@@ -232,8 +232,8 @@ export default function App() {
     if (!token) { encerrarSessao("Entre novamente para editar o grupo."); return; }
     setEnviando(true);
     try {
-      const grupo = await atualizarGrupo(grupoSelecionado.id, dados, token);
-      setGrupoSelecionado({ ...grupo, papel: grupoSelecionado.papel });
+      await atualizarGrupo(grupoSelecionado.id, dados, token);
+      setGrupoSelecionado(await buscarGrupo(grupoSelecionado.id, token));
       setAvisoGrupo("Grupo atualizado com sucesso.");
       setTela("detalhes");
     } catch (error) {
@@ -252,7 +252,7 @@ export default function App() {
     setEnviando(true);
     try {
       const grupo = await cancelarGrupo(grupoSelecionado.id, token);
-      setGrupoSelecionado({ ...grupo, papel: grupoSelecionado.papel });
+      setGrupoSelecionado({ ...grupo, papel: grupoSelecionado.papel, formacao: grupoSelecionado.formacao });
       setAvisoGrupo("Grupo cancelado. Ele continua disponível para consulta.");
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) { encerrarSessao("Sua sessão terminou. Entre novamente para continuar."); return; }

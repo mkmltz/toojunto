@@ -1,5 +1,5 @@
 import { requisicao } from "./auth";
-import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoComPapel, GrupoCriacaoDados } from "../types/groups";
+import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoComPapel, GrupoCriacaoDados, GrupoDetalhe } from "../types/groups";
 
 export const criarGrupo = (dados: GrupoCriacaoDados, token: string) =>
   requisicao<Grupo>("/groups", {
@@ -12,7 +12,7 @@ export const listarGrupos = (token: string) => requisicao<GrupoComPapel[]>("/gro
   headers: { Authorization: `Bearer ${token}` },
 });
 
-export const buscarGrupo = (grupoId: number, token: string) => requisicao<GrupoComPapel>(`/groups/${grupoId}`, {
+export const buscarGrupo = (grupoId: number, token: string) => requisicao<GrupoDetalhe>(`/groups/${grupoId}`, {
   headers: { Authorization: `Bearer ${token}` },
 });
 

@@ -9,6 +9,7 @@ from .schemas import (
     GrupoAtualizacao,
     GrupoComPapelResposta,
     GrupoCriacao,
+    GrupoDetalheResposta,
     GrupoResposta,
 )
 from .service import (
@@ -40,7 +41,7 @@ def listar_grupos(
 
 @router.get(
     "/{group_id}",
-    response_model=GrupoComPapelResposta,
+    response_model=GrupoDetalheResposta,
 )
 def consultar_grupo(
     group_id: int,

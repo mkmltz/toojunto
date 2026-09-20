@@ -12,7 +12,10 @@ from .schemas import (
     GrupoAtualizacao,
     GrupoComPapelResposta,
     GrupoCriacao,
+    GrupoDetalheResposta,
     GrupoResposta,
+    FormacaoGrupoResposta,
+    IntegranteGrupoResposta,
     PapelGrupo,
 )
 
@@ -91,7 +94,7 @@ def obter_grupo_do_usuario(
     grupo_id: int,
     usuario: Usuario,
     db: Session,
-) -> GrupoComPapelResposta:
+) -> GrupoDetalheResposta:
     participacao_ativa = (
         select(Participante.id)
         .where(
@@ -112,7 +115,37 @@ def obter_grupo_do_usuario(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Grupo não encontrado.",
         )
-    return _grupo_com_papel(grupo, usuario)
+    integrantes = db.execute(
+        select(Participante, Usuario)
+        .join(Usuario, Usuario.id == Participante.usuario_id)
+        .where(Participante.grupo_id == grupo.id)
+        .order_by(
+            (Participante.usuario_id != grupo.gestor_id),
+            Participante.id,
+        )
+    ).all()
+    quantidade_atual = len(integrantes)
+    formacao = FormacaoGrupoResposta(
+        quantidade_atual=quantidade_atual,
+        limite=grupo.quantidade_participantes,
+        vagas_disponiveis=max(
+            grupo.quantidade_participantes - quantidade_atual,
+            0,
+        ),
+        participantes=[
+            IntegranteGrupoResposta(
+                nome=integrante.nome,
+                papel=(
+                    PapelGrupo.GESTOR
+                    if integrante.id == grupo.gestor_id
+                    else PapelGrupo.PARTICIPANTE
+                ),
+            )
+            for _, integrante in integrantes
+        ],
+    )
+    dados_grupo = _grupo_com_papel(grupo, usuario).model_dump()
+    return GrupoDetalheResposta(**dados_grupo, formacao=formacao)
 
 
 def _buscar_grupo_gerenciavel(
