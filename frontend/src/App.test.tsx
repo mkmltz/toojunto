@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import type { GrupoComPapel } from "./types/groups";
@@ -321,5 +321,244 @@ describe("US-005", () => {
     fireEvent.click(screen.getByRole("button", { name: "Convidar pessoas" }));
     expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
     expect(localStorage.getItem("toojunto_access_token")).toBeNull();
+  });
+});
+
+describe("US-006", () => {
+  const conviteRecebido = {
+    group_name: "Grupo Convidado",
+    quota_value: "150.00",
+    participant_limit: 5,
+    available_slots: 2,
+    start_date: "2026-10-01",
+  };
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    window.history.replaceState({}, "", "/");
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    window.history.replaceState({}, "", "/invites/token-recebido");
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  it("abre a URL diretamente e consulta os dados públicos do convite", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(conviteRecebido));
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Você foi convidado para participar de um Grupo" })).toBeInTheDocument();
+    expect(screen.getByText("Grupo Convidado")).toBeInTheDocument();
+    expect(screen.getByText("R$ 150,00")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("01/10/2026")).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/invites/token-recebido",
+      expect.anything(),
+    );
+  });
+
+  it("apresenta mensagem uniforme quando o convite está indisponível", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "indisponível" }, 404));
+    render(<App />);
+    expect(await screen.findByText("Este convite não está mais disponível.")).toBeInTheDocument();
+  });
+
+  it("permite tentar novamente após falha ao consultar", async () => {
+    vi.mocked(fetch)
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(resposta(conviteRecebido));
+    render(<App />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível abrir o convite");
+
+    fireEvent.click(screen.getByRole("button", { name: "Tentar novamente" }));
+
+    expect(await screen.findByText("Grupo Convidado")).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserva a URL no Login e retorna ao convite sem aceitar automaticamente", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(conviteRecebido));
+    render(<App />);
+    await screen.findByText("Grupo Convidado");
+    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+    expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/invites/token-recebido");
+
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(resposta({ access_token: "token-valido", token_type: "bearer" }))
+      .mockResolvedValueOnce(resposta(usuario));
+    fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "ana@example.com" } });
+    fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "senha-segura" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByText("Grupo Convidado")).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/invites/token-recebido");
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("reutiliza o cadastro e preserva a URL até o Login", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(conviteRecebido));
+    render(<App />);
+    await screen.findByText("Grupo Convidado");
+    fireEvent.click(screen.getByRole("button", { name: "Criar minha conta" }));
+
+    fireEvent.change(screen.getByLabelText("Nome completo *"), { target: { value: "Nova Pessoa" } });
+    fireEvent.change(screen.getByLabelText("E-mail *"), { target: { value: "nova@example.com" } });
+    fireEvent.change(screen.getByLabelText("Senha *"), { target: { value: "senha-segura" } });
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ id: 9, nome: "Nova Pessoa", email: "nova@example.com", telefone: null }, 201));
+    fireEvent.click(screen.getByRole("button", { name: "Criar conta" }));
+
+    expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Conta criada com sucesso");
+    expect(window.location.pathname).toBe("/invites/token-recebido");
+  });
+
+  it("aceita com JWT e permite abrir o Grupo removendo a URL do convite", async () => {
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(resposta(usuario))
+      .mockResolvedValueOnce(resposta(conviteRecebido));
+    render(<App />);
+    await screen.findByText("Grupo Convidado");
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ group_id: 1, participant_id: 8, status: "ATIVO" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+
+    expect(await screen.findByRole("heading", { name: "Você entrou no Grupo" })).toBeInTheDocument();
+    expect(fetch).toHaveBeenLastCalledWith(
+      "http://127.0.0.1:8000/invites/token-recebido/accept",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer token-valido" }),
+      }),
+    );
+
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(grupo({ papel: "PARTICIPANTE" })));
+    fireEvent.click(screen.getByRole("button", { name: "Ver Grupo" }));
+    expect(await screen.findByRole("heading", { name: "Grupo dos Amigos" })).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/");
+  });
+
+  it("retorna ao Login preservando o convite quando o aceite recebe 401", async () => {
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(resposta(usuario))
+      .mockResolvedValueOnce(resposta(conviteRecebido));
+    render(<App />);
+    await screen.findByText("Grupo Convidado");
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Credenciais inválidas." }, 401));
+
+    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+
+    expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/invites/token-recebido");
+    expect(localStorage.getItem("toojunto_access_token")).toBeNull();
+  });
+
+  it("mostra a mensagem do Backend quando o aceite recebe 409", async () => {
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(resposta(usuario))
+      .mockResolvedValueOnce(resposta(conviteRecebido));
+    render(<App />);
+    await screen.findByText("Grupo Convidado");
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Este Grupo não possui vagas disponíveis." }, 409));
+
+    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Este Grupo não possui vagas disponíveis.");
+    expect(screen.getByRole("button", { name: "Entrar no Grupo" })).toBeEnabled();
+  });
+
+  it("torna o convite indisponível quando o aceite recebe 404", async () => {
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(resposta(usuario))
+      .mockResolvedValueOnce(resposta(conviteRecebido));
+    render(<App />);
+    await screen.findByText("Grupo Convidado");
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Convite não encontrado." }, 404));
+
+    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+
+    expect(await screen.findByText("Este convite não está mais disponível.")).toBeInTheDocument();
+  });
+
+  it("permite repetir o aceite após erro genérico", async () => {
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(resposta(usuario))
+      .mockResolvedValueOnce(resposta(conviteRecebido));
+    render(<App />);
+    await screen.findByText("Grupo Convidado");
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Falha interna" }, 500));
+
+    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível entrar no Grupo. Tente novamente.");
+    expect(screen.getByRole("button", { name: "Entrar no Grupo" })).toBeEnabled();
+  });
+
+  it("Agora não sai do fluxo sem chamar o Backend novamente", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(conviteRecebido));
+    render(<App />);
+    await screen.findByText("Grupo Convidado");
+
+    fireEvent.click(screen.getByRole("button", { name: "Agora não" }));
+
+    expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignora resposta tardia depois que a URL do convite é abandonada", async () => {
+    let resolver!: (response: Response) => void;
+    vi.mocked(fetch).mockReturnValueOnce(new Promise((resolve) => { resolver = resolve; }));
+    render(<App />);
+    window.history.replaceState({}, "", "/");
+    fireEvent(window, new PopStateEvent("popstate"));
+    expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
+
+    await act(async () => { resolver(resposta(conviteRecebido)); });
+
+    expect(screen.queryByText("Grupo Convidado")).not.toBeInTheDocument();
+  });
+
+  it("ignora aceite antigo quando a URL muda para outro convite", async () => {
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(resposta(usuario))
+      .mockResolvedValueOnce(resposta(conviteRecebido));
+    render(<App />);
+    await screen.findByText("Grupo Convidado");
+
+    let resolverAceite!: (response: Response) => void;
+    vi.mocked(fetch).mockReturnValueOnce(new Promise((resolve) => {
+      resolverAceite = resolve;
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({
+      ...conviteRecebido,
+      group_name: "Outro Grupo",
+    }));
+    window.history.pushState({}, "", "/invites/outro-token");
+    fireEvent(window, new PopStateEvent("popstate"));
+    expect(await screen.findByText("Outro Grupo")).toBeInTheDocument();
+
+    await act(async () => {
+      resolverAceite(resposta({
+        group_id: 1,
+        participant_id: 8,
+        status: "ATIVO",
+      }));
+    });
+
+    expect(screen.queryByRole("heading", { name: "Você entrou no Grupo" })).not.toBeInTheDocument();
+    expect(screen.getByText("Outro Grupo")).toBeInTheDocument();
   });
 });

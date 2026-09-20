@@ -1,20 +1,30 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AuthLayout } from "./components/AuthLayout";
 import { CreateGroupPage } from "./pages/CreateGroupPage";
 import { EditGroupPage } from "./pages/EditGroupPage";
 import { GroupCreatedPage } from "./pages/GroupCreatedPage";
 import { GroupDetailsPage } from "./pages/GroupDetailsPage";
 import { HomePage } from "./pages/HomePage";
+import { InvitePage } from "./pages/InvitePage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ApiError, buscarUsuarioAtual, cadastrarUsuario, fazerLogin } from "./services/auth";
 import { atualizarGrupo, buscarGrupo, cancelarGrupo, criarGrupo, gerarOuObterConvite, listarGrupos } from "./services/groups";
+import { aceitarConvite, consultarConvite } from "./services/invites";
 import type { Usuario } from "./types/auth";
 import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoComPapel, GrupoCriacaoDados } from "./types/groups";
+import type { AceiteConvite, ConvitePublico } from "./types/invites";
 
 const CHAVE_TOKEN = "toojunto_access_token";
 const CHAVE_GRUPO = "toojunto_selected_group_id";
-type Tela = "login" | "cadastro" | "home" | "criar-grupo" | "grupo-criado" | "detalhes" | "editar-grupo";
+type Tela = "login" | "cadastro" | "home" | "criar-grupo" | "grupo-criado" | "detalhes" | "editar-grupo" | "convite";
+
+function extrairTokenConvite(pathname: string): string | null {
+  const correspondencia = pathname.match(/^\/invites\/([^/]+)\/?$/);
+  if (!correspondencia) return null;
+  try { return decodeURIComponent(correspondencia[1]); }
+  catch { return null; }
+}
 
 function mensagemDeErro(error: unknown) {
   return error instanceof Error ? error.message : "Não foi possível concluir esta ação.";
@@ -31,7 +41,9 @@ function mensagemDeErroGrupo(error: unknown) {
 }
 
 export default function App() {
-  const [tela, setTela] = useState<Tela>("login");
+  const [conviteToken, setConviteToken] = useState<string | null>(() => extrairTokenConvite(window.location.pathname));
+  const conviteTokenAtual = useRef(conviteToken);
+  const [tela, setTela] = useState<Tela>(() => conviteToken ? "convite" : "login");
   const [usuario, setUsuario] = useState<Usuario | null>(null);
   const [grupos, setGrupos] = useState<GrupoComPapel[]>([]);
   const [grupoSelecionado, setGrupoSelecionado] = useState<GrupoComPapel | null>(null);
@@ -42,6 +54,13 @@ export default function App() {
   const [aviso, setAviso] = useState("");
   const [avisoGrupo, setAvisoGrupo] = useState("");
   const [erroLista, setErroLista] = useState("");
+  const [convitePublico, setConvitePublico] = useState<ConvitePublico | null>(null);
+  const [aceiteConvite, setAceiteConvite] = useState<AceiteConvite | null>(null);
+  const [carregandoConvite, setCarregandoConvite] = useState(Boolean(conviteToken));
+  const [aceitandoConvite, setAceitandoConvite] = useState(false);
+  const [erroConvite, setErroConvite] = useState("");
+  const [conviteIndisponivel, setConviteIndisponivel] = useState(false);
+  const [tentativaConvite, setTentativaConvite] = useState(0);
 
   function encerrarSessao(mensagem: string) {
     localStorage.removeItem(CHAVE_TOKEN);
@@ -60,6 +79,11 @@ export default function App() {
     async function restaurar() {
       try {
         const usuarioAtual = await buscarUsuarioAtual(token!);
+        if (conviteToken) {
+          setUsuario(usuarioAtual);
+          setTela("convite");
+          return;
+        }
         const grupoId = Number(localStorage.getItem(CHAVE_GRUPO));
         if (grupoId) {
           try {
@@ -77,13 +101,59 @@ export default function App() {
         }
         setUsuario(usuarioAtual);
       } catch (error) {
-        if (error instanceof ApiError && error.status === 401) encerrarSessao("Sua sessão terminou. Entre novamente para continuar.");
+        if (error instanceof ApiError && error.status === 401) {
+          if (conviteToken) {
+            localStorage.removeItem(CHAVE_TOKEN);
+            localStorage.removeItem(CHAVE_GRUPO);
+            setUsuario(null);
+            setTela("convite");
+          } else {
+            encerrarSessao("Sua sessão terminou. Entre novamente para continuar.");
+          }
+        }
       } finally {
         setCarregandoSessao(false);
       }
     }
     restaurar();
   }, []);
+
+  useEffect(() => {
+    if (!conviteToken) return;
+    let ativo = true;
+    setCarregandoConvite(true);
+    setErroConvite("");
+    setConviteIndisponivel(false);
+    consultarConvite(conviteToken)
+      .then((convite) => { if (ativo) setConvitePublico(convite); })
+      .catch((error) => {
+        if (!ativo) return;
+        setConvitePublico(null);
+        if (error instanceof ApiError && error.status === 404) {
+          setConviteIndisponivel(true);
+        } else {
+          setErroConvite("Não foi possível abrir o convite. Tente novamente.");
+        }
+      })
+      .finally(() => { if (ativo) setCarregandoConvite(false); });
+    return () => { ativo = false; };
+  }, [conviteToken, tentativaConvite]);
+
+  useEffect(() => {
+    function sincronizarComUrl() {
+      const token = extrairTokenConvite(window.location.pathname);
+      conviteTokenAtual.current = token;
+      setConviteToken(token);
+      setConvitePublico(null);
+      setAceiteConvite(null);
+      setErroConvite("");
+      setConviteIndisponivel(false);
+      setAceitandoConvite(false);
+      setTela(token ? "convite" : usuario ? "home" : "login");
+    }
+    window.addEventListener("popstate", sincronizarComUrl);
+    return () => window.removeEventListener("popstate", sincronizarComUrl);
+  }, [usuario]);
 
   useEffect(() => {
     if (usuario && tela === "home") carregarGrupos();
@@ -108,7 +178,7 @@ export default function App() {
       localStorage.setItem(CHAVE_TOKEN, resposta.access_token);
       localStorage.removeItem(CHAVE_GRUPO);
       setUsuario(await buscarUsuarioAtual(resposta.access_token));
-      setTela("home");
+      setTela(conviteToken ? "convite" : "home");
     } catch (error) {
       localStorage.removeItem(CHAVE_TOKEN);
       if (error instanceof ApiError && error.status === 401) throw new Error("E-mail ou senha inválidos.");
@@ -217,6 +287,69 @@ export default function App() {
     }
   }
 
+  async function entrarNoGrupoPeloConvite() {
+    if (!conviteToken) return;
+    if (!usuario) {
+      setAviso("");
+      setTela("login");
+      return;
+    }
+    const jwt = localStorage.getItem(CHAVE_TOKEN);
+    if (!jwt) {
+      setUsuario(null);
+      setTela("login");
+      return;
+    }
+    setAceitandoConvite(true);
+    setErroConvite("");
+    const tokenSolicitado = conviteToken;
+    try {
+      const aceite = await aceitarConvite(tokenSolicitado, jwt);
+      if (conviteTokenAtual.current !== tokenSolicitado) return;
+      setAceiteConvite(aceite);
+    } catch (error) {
+      if (conviteTokenAtual.current !== tokenSolicitado) return;
+      if (error instanceof ApiError && error.status === 401) {
+        localStorage.removeItem(CHAVE_TOKEN);
+        localStorage.removeItem(CHAVE_GRUPO);
+        setUsuario(null);
+        setTela("login");
+        setAviso("Sua sessão terminou. Entre novamente para continuar.");
+      } else if (error instanceof ApiError && error.status === 404) {
+        setConvitePublico(null);
+        setConviteIndisponivel(true);
+      } else if (error instanceof ApiError && error.status === 409) {
+        setErroConvite(error.message);
+      } else {
+        setErroConvite("Não foi possível entrar no Grupo. Tente novamente.");
+      }
+    } finally {
+      if (conviteTokenAtual.current === tokenSolicitado) {
+        setAceitandoConvite(false);
+      }
+    }
+  }
+
+  function abandonarConvite() {
+    window.history.replaceState({}, "", "/");
+    conviteTokenAtual.current = null;
+    setConviteToken(null);
+    setConvitePublico(null);
+    setAceiteConvite(null);
+    setErroConvite("");
+    setConviteIndisponivel(false);
+    setTela(usuario ? "home" : "login");
+  }
+
+  async function verGrupoAceito(grupoId: number) {
+    window.history.replaceState({}, "", "/");
+    conviteTokenAtual.current = null;
+    setConviteToken(null);
+    setConvitePublico(null);
+    setAceiteConvite(null);
+    await abrirGrupo(grupoId);
+  }
+
   function voltarParaHome() {
     localStorage.removeItem(CHAVE_GRUPO);
     setGrupoSelecionado(null);
@@ -228,10 +361,11 @@ export default function App() {
   function sair() { encerrarSessao("Você saiu da sua conta."); }
 
   if (carregandoSessao) return <main className="loading-screen">Carregando TooJunto...</main>;
+  if (tela === "convite" && conviteToken) return <InvitePage convite={convitePublico} aceite={aceiteConvite} carregando={carregandoConvite} aceitando={aceitandoConvite} erro={erroConvite} autenticado={Boolean(usuario)} indisponivel={conviteIndisponivel} onEntrar={entrarNoGrupoPeloConvite} onAgoraNao={abandonarConvite} onCriarConta={() => setTela("cadastro")} onTentarNovamente={() => setTentativaConvite((tentativa) => tentativa + 1)} onVerGrupo={verGrupoAceito} />;
   if (usuario && tela === "criar-grupo") return <CreateGroupPage nomeUsuario={usuario.nome} carregando={enviando} onVoltar={voltarParaHome} onCriar={cadastrarGrupo} />;
   if (usuario && tela === "grupo-criado" && grupoCriado) return <GroupCreatedPage nomeUsuario={usuario.nome} grupo={grupoCriado} onVoltar={voltarParaHome} onVerGrupo={() => abrirGrupo(grupoCriado.id)} />;
   if (usuario && tela === "editar-grupo" && grupoSelecionado) return <EditGroupPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} carregando={enviando} onVoltar={() => setTela("detalhes")} onSalvar={atualizarGrupoSelecionado} />;
   if (usuario && tela === "detalhes" && grupoSelecionado) return <GroupDetailsPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarParaHome} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} onObterConvite={obterConviteSelecionado} />;
   if (usuario) return <HomePage usuario={usuario} grupos={grupos} carregando={carregandoLista} erro={erroLista || avisoGrupo} onAbrirGrupo={abrirGrupo} onCriarGrupo={() => setTela("criar-grupo")} onRecarregar={carregarGrupos} onSair={sair} />;
-  return <AuthLayout>{tela === "login" ? <LoginPage aviso={aviso} carregando={enviando} onEntrar={entrar} onCadastrar={() => { setAviso(""); setTela("cadastro"); }} /> : <RegisterPage carregando={enviando} onVoltar={() => setTela("login")} onCadastrar={cadastrar} />}</AuthLayout>;
+  return <AuthLayout>{tela === "login" ? <LoginPage aviso={aviso} carregando={enviando} onEntrar={entrar} onCadastrar={() => { setAviso(""); setTela("cadastro"); }} onVoltarConvite={conviteToken ? () => setTela("convite") : undefined} /> : <RegisterPage carregando={enviando} onVoltar={() => setTela("login")} onCadastrar={cadastrar} />}</AuthLayout>;
 }
