@@ -103,6 +103,10 @@ class GrupoComPapelResposta(GrupoResposta):
     papel: PapelGrupo
 
 
+class GrupoListaResposta(GrupoComPapelResposta):
+    vagas_disponiveis: int
+
+
 class IntegranteGrupoResposta(BaseModel):
     nome: str
     papel: PapelGrupo

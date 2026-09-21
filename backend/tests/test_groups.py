@@ -609,6 +609,7 @@ def test_listagem_retorna_grupo_do_gestor_com_papel_gestor(usuario):
         {
             **grupo,
             "papel": "GESTOR",
+            "vagas_disponiveis": 9,
         }
     ]
 
@@ -630,8 +631,49 @@ def test_listagem_retorna_grupo_associado_com_papel_participante(
         {
             **grupo,
             "papel": "PARTICIPANTE",
+            "vagas_disponiveis": 8,
         }
     ]
+
+
+@pytest.mark.parametrize("estado", ["RASCUNHO", "SORTEIO", "CANCELADO"])
+def test_listagem_informa_grupo_completo_para_gestor_e_participante(
+    usuario,
+    outro_usuario,
+    estado,
+):
+    grupo = criar_grupo_via_api(
+        usuario, quantidade_participantes=2, quantidade_ciclos=2,
+    )
+    associar_usuario_ao_grupo(outro_usuario, grupo["id"])
+    db = SessionLocal()
+    try:
+        db.get(Grupo, grupo["id"]).status = estado
+        db.commit()
+    finally:
+        db.close()
+
+    for pessoa, papel in [(usuario, "GESTOR"), (outro_usuario, "PARTICIPANTE")]:
+        resposta = client.get("/groups", headers=cabecalho_autorizacao(pessoa))
+        assert resposta.status_code == 200
+        assert resposta.json()[0]["status"] == estado
+        assert resposta.json()[0]["papel"] == papel
+        assert resposta.json()[0]["vagas_disponiveis"] == 0
+
+
+def test_listagem_conta_associacao_inativa_como_vaga_ocupada(
+    usuario,
+    outro_usuario,
+):
+    grupo = criar_grupo_via_api(
+        usuario, quantidade_participantes=2, quantidade_ciclos=2,
+    )
+    associar_usuario_ao_grupo(outro_usuario, grupo["id"], "INATIVO")
+
+    resposta = client.get("/groups", headers=cabecalho_autorizacao(usuario))
+
+    assert resposta.status_code == 200
+    assert resposta.json()[0]["vagas_disponiveis"] == 0
 
 
 def test_listagem_nao_retorna_grupo_sem_participacao_ativa(

@@ -9,10 +9,10 @@ import { InvitePage } from "./pages/InvitePage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ApiError, buscarUsuarioAtual, cadastrarUsuario, fazerLogin } from "./services/auth";
-import { atualizarGrupo, buscarGrupo, cancelarGrupo, criarGrupo, gerarOuObterConvite, listarGrupos } from "./services/groups";
+import { atualizarGrupo, buscarGrupo, cancelarGrupo, criarGrupo, gerarOuObterConvite, listarGrupos, prepararSorteio } from "./services/groups";
 import { aceitarConvite, consultarConvite } from "./services/invites";
 import type { Usuario } from "./types/auth";
-import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoComPapel, GrupoCriacaoDados, GrupoDetalhe } from "./types/groups";
+import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoCriacaoDados, GrupoDetalhe, GrupoLista } from "./types/groups";
 import type { AceiteConvite, ConvitePublico } from "./types/invites";
 
 const CHAVE_TOKEN = "toojunto_access_token";
@@ -45,7 +45,7 @@ export default function App() {
   const conviteTokenAtual = useRef(conviteToken);
   const [tela, setTela] = useState<Tela>(() => conviteToken ? "convite" : "login");
   const [usuario, setUsuario] = useState<Usuario | null>(null);
-  const [grupos, setGrupos] = useState<GrupoComPapel[]>([]);
+  const [grupos, setGrupos] = useState<GrupoLista[]>([]);
   const [grupoSelecionado, setGrupoSelecionado] = useState<GrupoDetalhe | null>(null);
   const [grupoCriado, setGrupoCriado] = useState<Grupo | null>(null);
   const [carregandoSessao, setCarregandoSessao] = useState(true);
@@ -263,6 +263,25 @@ export default function App() {
     } finally { setEnviando(false); }
   }
 
+  async function prepararSorteioSelecionado() {
+    if (!grupoSelecionado) return;
+    const token = localStorage.getItem(CHAVE_TOKEN);
+    if (!token) { encerrarSessao("Entre novamente para preparar o sorteio."); return; }
+    setEnviando(true);
+    try {
+      await prepararSorteio(grupoSelecionado.id, token);
+      setGrupoSelecionado(await buscarGrupo(grupoSelecionado.id, token));
+      setAvisoGrupo("Grupo pronto para o sorteio.");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) { encerrarSessao("Sua sessão terminou. Entre novamente para continuar."); return; }
+      if (error instanceof ApiError && error.status === 409) {
+        try { setGrupoSelecionado(await buscarGrupo(grupoSelecionado.id, token)); } catch { /* mantém os últimos dados visíveis */ }
+        throw new Error("O grupo mudou e não pôde ser preparado. Confira os dados atualizados.");
+      }
+      throw new Error(mensagemDeErroGrupo(error));
+    } finally { setEnviando(false); }
+  }
+
   async function obterConviteSelecionado(): Promise<ConviteGrupo> {
     if (!grupoSelecionado) throw new Error("O Grupo não está disponível.");
     const token = localStorage.getItem(CHAVE_TOKEN);
@@ -365,7 +384,7 @@ export default function App() {
   if (usuario && tela === "criar-grupo") return <CreateGroupPage nomeUsuario={usuario.nome} carregando={enviando} onVoltar={voltarParaHome} onCriar={cadastrarGrupo} />;
   if (usuario && tela === "grupo-criado" && grupoCriado) return <GroupCreatedPage nomeUsuario={usuario.nome} grupo={grupoCriado} onVoltar={voltarParaHome} onVerGrupo={() => abrirGrupo(grupoCriado.id)} />;
   if (usuario && tela === "editar-grupo" && grupoSelecionado) return <EditGroupPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} carregando={enviando} onVoltar={() => setTela("detalhes")} onSalvar={atualizarGrupoSelecionado} />;
-  if (usuario && tela === "detalhes" && grupoSelecionado) return <GroupDetailsPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarParaHome} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} onObterConvite={obterConviteSelecionado} />;
+  if (usuario && tela === "detalhes" && grupoSelecionado) return <GroupDetailsPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarParaHome} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} onObterConvite={obterConviteSelecionado} onPrepararSorteio={prepararSorteioSelecionado} />;
   if (usuario) return <HomePage usuario={usuario} grupos={grupos} carregando={carregandoLista} erro={erroLista || avisoGrupo} onAbrirGrupo={abrirGrupo} onCriarGrupo={() => setTela("criar-grupo")} onRecarregar={carregarGrupos} onSair={sair} />;
   return <AuthLayout>{tela === "login" ? <LoginPage aviso={aviso} carregando={enviando} onEntrar={entrar} onCadastrar={() => { setAviso(""); setTela("cadastro"); }} onVoltarConvite={conviteToken ? () => setTela("convite") : undefined} /> : <RegisterPage carregando={enviando} onVoltar={() => setTela("login")} onCadastrar={cadastrar} />}</AuthLayout>;
 }

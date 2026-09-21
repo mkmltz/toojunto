@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import type { GrupoComPapel, GrupoDetalhe } from "./types/groups";
+import type { GrupoDetalhe, GrupoLista } from "./types/groups";
 
 const usuario = { id: 1, nome: "Ana Souza", email: "ana@example.com", telefone: null };
 
@@ -9,8 +9,8 @@ function resposta(corpo: unknown, status = 200): Response {
   return { ok: status >= 200 && status < 300, status, json: vi.fn().mockResolvedValue(corpo) } as unknown as Response;
 }
 
-function grupo(sobrescritas: Partial<GrupoDetalhe> = {}): GrupoDetalhe {
-  return { id: 1, nome: "Grupo dos Amigos", gestor_id: 1, valor_cota: "200.00", valor_premio: "2000.00", quantidade_participantes: 10, quantidade_ciclos: 10, data_inicio: "2026-10-01", status: "RASCUNHO", created_at: "2026-09-16T12:00:00", papel: "GESTOR", formacao: { quantidade_atual: 2, limite: 10, vagas_disponiveis: 8, participantes: [{ nome: "Ana Souza", papel: "GESTOR" }, { nome: "Bruno Lima", papel: "PARTICIPANTE" }] }, ...sobrescritas };
+function grupo(sobrescritas: Partial<GrupoDetalhe & GrupoLista> = {}): GrupoDetalhe & GrupoLista {
+  return { id: 1, nome: "Grupo dos Amigos", gestor_id: 1, valor_cota: "200.00", valor_premio: "2000.00", quantidade_participantes: 10, quantidade_ciclos: 10, data_inicio: "2026-10-01", status: "RASCUNHO", created_at: "2026-09-16T12:00:00", papel: "GESTOR", vagas_disponiveis: 8, formacao: { quantidade_atual: 2, limite: 10, vagas_disponiveis: 8, participantes: [{ nome: "Ana Souza", papel: "GESTOR" }, { nome: "Bruno Lima", papel: "PARTICIPANTE" }] }, ...sobrescritas };
 }
 
 const convite = {
@@ -21,7 +21,7 @@ const convite = {
   created_at: "2026-09-20T12:00:00",
 };
 
-async function autenticar(grupos: GrupoComPapel[] = []) {
+async function autenticar(grupos: GrupoLista[] = []) {
   localStorage.setItem("toojunto_access_token", "token-valido");
   vi.mocked(fetch).mockResolvedValueOnce(resposta(usuario)).mockResolvedValueOnce(resposta(grupos));
   const app = render(<App />);
@@ -382,6 +382,90 @@ describe("US-005", () => {
     fireEvent.click(screen.getByRole("button", { name: "Convidar pessoas" }));
     expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
     expect(localStorage.getItem("toojunto_access_token")).toBeNull();
+  });
+});
+
+describe("US-008 — sinalização em Meus Grupos", () => {
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  beforeEach(() => { localStorage.clear(); vi.stubGlobal("fetch", vi.fn()); });
+
+  it.each(["GESTOR", "PARTICIPANTE"] as const)("mostra todas as situações para %s", async (papel) => {
+    const grupos = [
+      grupo({ id: 1, nome: "Formando", papel, vagas_disponiveis: 3 }),
+      grupo({ id: 2, nome: "Completo", papel, vagas_disponiveis: 0 }),
+      grupo({ id: 3, nome: "Preparado", papel, status: "SORTEIO", vagas_disponiveis: 0 }),
+      grupo({ id: 4, nome: "Cancelado teste", papel, status: "CANCELADO", vagas_disponiveis: 2 }),
+    ];
+    await autenticar(grupos);
+    const lista = screen.getByRole("region", { name: "Meus Grupos" });
+    const badges = Array.from(lista.querySelectorAll(".group-situation"));
+    expect(badges.map((badge) => badge.textContent)).toEqual(["Em formação", "Grupo completo", "Pronto para sorteio", "Cancelado"]);
+    expect(badges.map((badge) => badge.className)).toEqual([
+      "badge group-situation forming", "badge group-situation complete",
+      "badge group-situation ready", "badge group-situation danger",
+    ]);
+    expect(within(lista).queryByText("RASCUNHO")).not.toBeInTheDocument();
+    expect(within(lista).queryByRole("button", { name: "Realizar sorteio" })).not.toBeInTheDocument();
+  });
+});
+
+describe("US-008", () => {
+  const completo = grupo({ formacao: { ...grupo().formacao, quantidade_atual: 10, vagas_disponiveis: 0 } });
+
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  beforeEach(() => { localStorage.clear(); vi.stubGlobal("fetch", vi.fn()); });
+
+  it("mostra a preparação somente ao gestor de grupo completo", async () => {
+    await abrirDetalhes();
+    expect(screen.queryByRole("button", { name: "Preparar sorteio" })).not.toBeInTheDocument();
+    cleanup(); localStorage.clear();
+    await abrirDetalhes(grupo({ ...completo, papel: "PARTICIPANTE" }));
+    expect(screen.queryByRole("button", { name: "Preparar sorteio" })).not.toBeInTheDocument();
+    cleanup(); localStorage.clear();
+    await abrirDetalhes(completo);
+    expect(screen.getByRole("button", { name: "Preparar sorteio" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Convidar pessoas" })).not.toBeInTheDocument();
+  });
+
+  it("confirma a regra do gestor antes de chamar a API e permite cancelar", async () => {
+    await abrirDetalhes(completo);
+    const chamadas = vi.mocked(fetch).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Preparar sorteio" }));
+    const dialogo = screen.getByRole("dialog", { name: "Preparar sorteio?" });
+    expect(dialogo).toHaveTextContent("Você ficará com a 1ª posição");
+    expect(dialogo).toHaveTextContent("não será possível adicionar novas pessoas");
+    expect(fetch).toHaveBeenCalledTimes(chamadas);
+    fireEvent.click(within(dialogo).getByRole("button", { name: "Cancelar" }));
+    expect(fetch).toHaveBeenCalledTimes(chamadas);
+  });
+
+  it("prepara por POST, recarrega os dados e mostra o estado para participantes", async () => {
+    await abrirDetalhes(completo);
+    const preparado = grupo({ ...completo, status: "SORTEIO" });
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(preparado)).mockResolvedValueOnce(resposta(preparado));
+    fireEvent.click(screen.getByRole("button", { name: "Preparar sorteio" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Preparar sorteio?" })).getByRole("button", { name: "Preparar sorteio" }));
+    expect(await screen.findByText("Grupo pronto para o sorteio.")).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/prepare-draw", expect.objectContaining({ method: "POST", headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
+    expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups/1", expect.anything());
+    expect(screen.getByText("Formação encerrada. O grupo está pronto para o sorteio.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Preparar sorteio" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Realizar sorteio" })).not.toBeInTheDocument();
+    cleanup(); localStorage.clear();
+    await abrirDetalhes(grupo({ ...preparado, papel: "PARTICIPANTE" }));
+    expect(screen.getByText("Formação encerrada. O grupo está pronto para o sorteio.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Preparar sorteio" })).not.toBeInTheDocument();
+  });
+
+  it("atualiza o grupo e explica quando a preparação é recusada", async () => {
+    await abrirDetalhes(completo);
+    const incompleto = grupo();
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Formação incompleta." }, 409)).mockResolvedValueOnce(resposta(incompleto));
+    fireEvent.click(screen.getByRole("button", { name: "Preparar sorteio" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Preparar sorteio?" })).getByRole("button", { name: "Preparar sorteio" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("O grupo mudou e não pôde ser preparado.");
+    expect(screen.getByText("Faltam 8 pessoas para completar o Grupo.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Preparar sorteio" })).not.toBeInTheDocument();
   });
 });
 

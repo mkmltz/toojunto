@@ -33,6 +33,10 @@ export interface GrupoComPapel extends Grupo {
   papel: PapelGrupo;
 }
 
+export interface GrupoLista extends GrupoComPapel {
+  vagas_disponiveis: number;
+}
+
 export interface IntegranteGrupo {
   nome: string;
   papel: PapelGrupo;

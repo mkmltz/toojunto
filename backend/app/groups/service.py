@@ -13,6 +13,7 @@ from .schemas import (
     GrupoComPapelResposta,
     GrupoCriacao,
     GrupoDetalheResposta,
+    GrupoListaResposta,
     GrupoResposta,
     FormacaoGrupoResposta,
     IntegranteGrupoResposta,
@@ -72,7 +73,7 @@ def _grupo_com_papel(
 def listar_grupos_do_usuario(
     usuario: Usuario,
     db: Session,
-) -> list[GrupoComPapelResposta]:
+) -> list[GrupoListaResposta]:
     participacao_ativa = (
         select(Participante.id)
         .where(
@@ -82,12 +83,29 @@ def listar_grupos_do_usuario(
         )
         .exists()
     )
-    grupos = db.scalars(
-        select(Grupo)
+    ocupacao = (
+        select(
+            Participante.grupo_id.label("grupo_id"),
+            func.count(Participante.id).label("quantidade_atual"),
+        )
+        .group_by(Participante.grupo_id)
+        .subquery()
+    )
+    grupos = db.execute(
+        select(Grupo, func.coalesce(ocupacao.c.quantidade_atual, 0))
+        .outerjoin(ocupacao, ocupacao.c.grupo_id == Grupo.id)
         .where(participacao_ativa)
         .order_by(Grupo.created_at.desc(), Grupo.id.desc())
     ).all()
-    return [_grupo_com_papel(grupo, usuario) for grupo in grupos]
+    return [
+        GrupoListaResposta(
+            **_grupo_com_papel(grupo, usuario).model_dump(),
+            vagas_disponiveis=max(
+                grupo.quantidade_participantes - quantidade_atual, 0
+            ),
+        )
+        for grupo, quantidade_atual in grupos
+    ]
 
 
 def obter_grupo_do_usuario(
@@ -246,6 +264,56 @@ def cancelar_grupo(
         db.rollback()
         raise
 
+    return grupo
+
+
+def preparar_sorteio(
+    grupo_id: int,
+    gestor: Usuario,
+    db: Session,
+) -> Grupo:
+    grupo = db.scalar(
+        select(Grupo).where(Grupo.id == grupo_id).with_for_update()
+    )
+    if grupo is None:
+        raise HTTPException(status_code=404, detail="Grupo não encontrado.")
+    if grupo.gestor_id != gestor.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Somente o gestor proprietário pode preparar o sorteio.",
+        )
+    if grupo.status != "RASCUNHO":
+        raise HTTPException(
+            status_code=409,
+            detail="O estado do Grupo não permite preparar o sorteio.",
+        )
+
+    participantes = db.scalars(
+        select(Participante).where(Participante.grupo_id == grupo.id)
+    ).all()
+    if (
+        grupo.quantidade_participantes < 2
+        or grupo.quantidade_ciclos != grupo.quantidade_participantes
+        or len(participantes) != grupo.quantidade_participantes
+        or len({p.usuario_id for p in participantes}) != len(participantes)
+        or any(
+            p.status != "ATIVO" or p.ordem_sorteio is not None
+            for p in participantes
+        )
+        or sum(p.usuario_id == grupo.gestor_id for p in participantes) != 1
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="A formação do Grupo não está apta para o sorteio.",
+        )
+
+    try:
+        grupo.status = "SORTEIO"
+        db.commit()
+        db.refresh(grupo)
+    except Exception:
+        db.rollback()
+        raise
     return grupo
 
 

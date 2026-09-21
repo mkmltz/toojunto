@@ -1,5 +1,5 @@
 import { requisicao } from "./auth";
-import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoComPapel, GrupoCriacaoDados, GrupoDetalhe } from "../types/groups";
+import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoCriacaoDados, GrupoDetalhe, GrupoLista } from "../types/groups";
 
 export const criarGrupo = (dados: GrupoCriacaoDados, token: string) =>
   requisicao<Grupo>("/groups", {
@@ -8,7 +8,7 @@ export const criarGrupo = (dados: GrupoCriacaoDados, token: string) =>
     body: JSON.stringify(dados),
   });
 
-export const listarGrupos = (token: string) => requisicao<GrupoComPapel[]>("/groups", {
+export const listarGrupos = (token: string) => requisicao<GrupoLista[]>("/groups", {
   headers: { Authorization: `Bearer ${token}` },
 });
 
@@ -23,6 +23,11 @@ export const atualizarGrupo = (grupoId: number, dados: GrupoAtualizacaoDados, to
 });
 
 export const cancelarGrupo = (grupoId: number, token: string) => requisicao<Grupo>(`/groups/${grupoId}/cancel`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${token}` },
+});
+
+export const prepararSorteio = (grupoId: number, token: string) => requisicao<Grupo>(`/groups/${grupoId}/prepare-draw`, {
   method: "POST",
   headers: { Authorization: `Bearer ${token}` },
 });
