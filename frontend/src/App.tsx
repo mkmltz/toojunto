@@ -268,15 +268,18 @@ export default function App() {
     const token = localStorage.getItem(CHAVE_TOKEN);
     if (!token) { encerrarSessao("Entre novamente para preparar o sorteio."); return; }
     setEnviando(true);
+    let preparado = false;
     try {
       await prepararSorteio(grupoSelecionado.id, token);
+      preparado = true;
+      await realizarSorteio(grupoSelecionado.id, token);
       setGrupoSelecionado(await buscarGrupo(grupoSelecionado.id, token));
-      setAvisoGrupo("Grupo pronto para o sorteio.");
+      setAvisoGrupo("Sorteio realizado. A ordem de recebimento está disponível.");
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) { encerrarSessao("Sua sessão terminou. Entre novamente para continuar."); return; }
-      if (error instanceof ApiError && error.status === 409) {
+      if (preparado || (error instanceof ApiError && error.status === 409)) {
         try { setGrupoSelecionado(await buscarGrupo(grupoSelecionado.id, token)); } catch { /* mantém os últimos dados visíveis */ }
-        throw new Error("O grupo mudou e não pôde ser preparado. Confira os dados atualizados.");
+        throw new Error(preparado ? "O grupo foi preparado, mas o sorteio não pôde ser realizado. Tente novamente." : "O sorteio não pôde ser realizado. Confira a situação atual do grupo.");
       }
       throw new Error(mensagemDeErroGrupo(error));
     } finally { setEnviando(false); }

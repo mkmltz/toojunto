@@ -33,7 +33,11 @@ interface GroupDetailsPageProps {
 export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carregando, onVoltar, onEditar, onCancelar, onObterConvite, onPrepararSorteio, onRealizarSorteio }: GroupDetailsPageProps) {
   const [confirmando, setConfirmando] = useState(false);
   const [confirmandoSorteio, setConfirmandoSorteio] = useState(false);
-  const [confirmandoRealizacao, setConfirmandoRealizacao] = useState(false);
+  const [executandoSorteio, setExecutandoSorteio] = useState(false);
+  const executandoSorteioRef = useRef(false);
+  const botaoPrepararSorteio = useRef<HTMLButtonElement | null>(null);
+  const botaoCancelarSorteio = useRef<HTMLButtonElement | null>(null);
+  const botaoRealizarSorteio = useRef<HTMLButtonElement | null>(null);
   const [erro, setErro] = useState("");
   const [convite, setConvite] = useState<ConviteGrupo | null>(null);
   const [carregandoConvite, setCarregandoConvite] = useState(false);
@@ -52,6 +56,38 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
   const botaoConfirmarPagamento = useRef<HTMLButtonElement | null>(null);
   const tituloPagamentos = useRef<HTMLHeadingElement | null>(null);
   const modalPagamentoAberta = useRef(false);
+  useEffect(() => {
+    if (!confirmandoSorteio) return;
+    botaoCancelarSorteio.current?.focus();
+    const overflowAnterior = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function controlarTeclado(evento: KeyboardEvent) {
+      if (evento.key === "Escape" && !executandoSorteioRef.current) {
+        evento.preventDefault();
+        setConfirmandoSorteio(false);
+      }
+      if (evento.key !== "Tab") return;
+      const cancelar = botaoCancelarSorteio.current;
+      const realizar = botaoRealizarSorteio.current;
+      if (!cancelar || !realizar || cancelar.disabled || realizar.disabled) {
+        evento.preventDefault();
+        return;
+      }
+      if (evento.shiftKey && document.activeElement === cancelar) {
+        evento.preventDefault();
+        realizar.focus();
+      } else if (!evento.shiftKey && document.activeElement === realizar) {
+        evento.preventDefault();
+        cancelar.focus();
+      }
+    }
+    document.addEventListener("keydown", controlarTeclado);
+    return () => {
+      document.body.style.overflow = overflowAnterior;
+      document.removeEventListener("keydown", controlarTeclado);
+      if (botaoPrepararSorteio.current?.isConnected) botaoPrepararSorteio.current.focus();
+    };
+  }, [confirmandoSorteio]);
   useEffect(() => {
     setProgresso(null);
     setErroProgresso("");
@@ -158,6 +194,7 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
   const temCiclos = grupo.status === "ATIVO" || grupo.status === "ENCERRADO";
   const podePreparar = podeGerenciar && grupo.formacao.vagas_disponiveis === 0;
   const podeRealizarSorteio = grupo.papel === "GESTOR" && grupo.status === "SORTEIO";
+  useEffect(() => { if (!podePreparar) setConfirmandoSorteio(false); }, [podePreparar]);
   const linkConvite = convite ? new URL(convite.invite_path, window.location.origin).toString() : "";
   const mensagemVagas = grupo.formacao.vagas_disponiveis === 0
     ? "Grupo completo."
@@ -181,15 +218,23 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
   }
 
   async function confirmarPreparacao() {
+    if (executandoSorteioRef.current) return;
+    executandoSorteioRef.current = true;
+    setExecutandoSorteio(true);
     setErro("");
     try { await onPrepararSorteio(); setConfirmandoSorteio(false); }
-    catch (error) { setErro(error instanceof Error ? error.message : "Não foi possível preparar o sorteio."); }
+    catch (error) { setErro(error instanceof Error ? error.message : "Não foi possível realizar o sorteio."); }
+    finally { executandoSorteioRef.current = false; setExecutandoSorteio(false); }
   }
 
   async function confirmarRealizacao() {
+    if (executandoSorteioRef.current) return;
+    executandoSorteioRef.current = true;
+    setExecutandoSorteio(true);
     setErro("");
-    try { await onRealizarSorteio(); setConfirmandoRealizacao(false); }
+    try { await onRealizarSorteio(); }
     catch (error) { setErro(error instanceof Error ? error.message : "Não foi possível realizar o sorteio."); }
+    finally { executandoSorteioRef.current = false; setExecutandoSorteio(false); }
   }
 
   async function copiarLink() {
@@ -222,12 +267,11 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
 
   return <AppShell nome={nomeUsuario}>
     <button className="back" type="button" onClick={onVoltar}>← Voltar para Meus Grupos</button>
-    <section className="screen-title"><div><span className={`badge ${grupoConcluido ? "group-situation complete" : grupo.status === "ATIVO" ? "group-situation drawn" : grupo.status === "CANCELADO" ? "danger" : ""}`}>{grupoConcluido ? "Grupo concluído" : grupo.status === "ATIVO" ? "Sorteio realizado" : grupo.status === "SORTEIO" ? "Pronto para sorteio" : grupo.status}</span><h1 className="details-title">{grupo.nome}</h1><p className="subtitle">Seu papel: {grupo.papel === "GESTOR" ? "Gestor" : "Participante"}</p></div></section>
+    <section className="screen-title"><div><span className={`badge ${grupoConcluido ? "group-situation complete" : grupo.status === "ATIVO" ? "group-situation drawn" : grupo.status === "CANCELADO" ? "danger" : ""}`}>{grupoConcluido ? "Grupo concluído" : grupo.status === "ATIVO" ? "Em andamento" : grupo.status === "SORTEIO" ? "Pronto para sorteio" : grupo.status}</span><h1 className="details-title">{grupo.nome}</h1><p className="subtitle">Seu papel: {grupo.papel === "GESTOR" ? "Gestor" : "Participante"}</p></div></section>
     {aviso && <p className="alert success" role="status">{aviso}</p>}
-    {erro && <p className="alert error" role="alert">{erro}</p>}
+    {erro && (!confirmandoSorteio || !podePreparar) && <p className="alert error" role="alert">{erro}</p>}
     {grupo.status === "SORTEIO" && <p className="alert success" role="status">Formação encerrada. O grupo está pronto para o sorteio.</p>}
-    {podeRealizarSorteio && !confirmandoRealizacao && <section className="card"><h2>Grupo pronto para sorteio</h2><button className="btn btn-primary" type="button" onClick={() => setConfirmandoRealizacao(true)}>Realizar sorteio</button></section>}
-    {podeRealizarSorteio && confirmandoRealizacao && <section className="card confirmation" role="dialog" aria-labelledby="titulo-realizar-sorteio"><h2 id="titulo-realizar-sorteio">Realizar sorteio?</h2><p>Você ficará com a 1ª posição. As demais pessoas serão sorteadas.</p><p>Depois de realizado, o sorteio não poderá ser alterado.</p><button className="btn btn-primary" type="button" disabled={carregando} onClick={confirmarRealizacao}>{carregando ? "Sorteando..." : "Realizar sorteio"}</button><button className="btn btn-secondary" type="button" disabled={carregando} onClick={() => setConfirmandoRealizacao(false)}>Cancelar</button></section>}
+    {podeRealizarSorteio && <section className="card"><h2>Grupo pronto para sorteio</h2><button className="btn btn-primary" type="button" disabled={executandoSorteio || carregando} onClick={confirmarRealizacao}>{executandoSorteio ? "Sorteando..." : "Realizar sorteio"}</button></section>}
     {grupoConcluido && <p className="alert success" role="status"><b>Grupo concluído.</b> Todos os ciclos e pagamentos deste Grupo foram concluídos.</p>}
     {temCiclos && carregandoProgresso && <p role="status">Carregando progresso do grupo...</p>}
     {temCiclos && erroProgresso && <p className="alert error" role="alert">{erroProgresso}</p>}
@@ -250,8 +294,8 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
     </section>
     {podeGerenciar && !podePreparar && !convite && <section className="card invite-action"><h2>Convide pessoas para o Grupo</h2><p>Compartilhe este convite com quem você deseja trazer para o grupo.</p><button className="btn btn-primary" type="button" disabled={carregandoConvite} onClick={obterConvite}>{carregandoConvite ? "Preparando convite..." : "Convidar pessoas"}</button></section>}
     {podeGerenciar && !podePreparar && convite && <section className="card invite-card"><h2>Convide pessoas para o Grupo</h2><p>Compartilhe este convite com quem você deseja trazer para o grupo.</p><div className="invite-link" aria-label="Link do convite">{linkConvite}</div>{feedbackConvite && <p className="alert success" role="status">{feedbackConvite}</p>}<button className="btn btn-primary" type="button" onClick={compartilharConvite}>Compartilhar convite</button><button className="btn btn-secondary" type="button" onClick={copiarLink}>Copiar link</button></section>}
-    {podePreparar && !confirmandoSorteio && <section className="card"><h2>Seu grupo está completo</h2><p>A formação pode ser encerrada para preparar o sorteio.</p><button className="btn btn-primary" type="button" onClick={() => setConfirmandoSorteio(true)}>Preparar sorteio</button></section>}
-    {podePreparar && confirmandoSorteio && <section className="card confirmation" role="dialog" aria-labelledby="titulo-preparacao"><h2 id="titulo-preparacao">Preparar sorteio?</h2><p>A formação do grupo será encerrada e não será possível adicionar novas pessoas.</p><p>Você ficará com a 1ª posição. A ordem dos demais participantes será definida no sorteio.</p><button className="btn btn-primary" type="button" disabled={carregando} onClick={confirmarPreparacao}>{carregando ? "Preparando..." : "Preparar sorteio"}</button><button className="btn btn-secondary" type="button" disabled={carregando} onClick={() => setConfirmandoSorteio(false)}>Cancelar</button></section>}
+    {podePreparar && <section className="card"><h2>Seu grupo está completo</h2><button className="btn btn-primary" ref={botaoPrepararSorteio} type="button" onClick={() => setConfirmandoSorteio(true)}>Preparar sorteio</button></section>}
+    {podePreparar && confirmandoSorteio && <div className="payment-modal-backdrop"><section className="payment-modal card" role="dialog" aria-modal="true" aria-labelledby="titulo-preparacao"><h2 id="titulo-preparacao">Preparar sorteio</h2><p>O grupo está completo. Ao realizar o sorteio, será definida a ordem em que cada participante receberá.</p>{erro && <p className="alert error" role="alert">{erro}</p>}<button className="btn btn-secondary" ref={botaoCancelarSorteio} type="button" disabled={executandoSorteio} onClick={() => setConfirmandoSorteio(false)}>Cancelar</button><button className="btn btn-primary" ref={botaoRealizarSorteio} type="button" disabled={executandoSorteio} onClick={confirmarPreparacao}>{executandoSorteio ? "Sorteando..." : "Realizar sorteio"}</button></section></div>}
     {podeGerenciar && !confirmando && <section className="card"><h2>Gerenciar grupo</h2><button className="btn btn-secondary" type="button" onClick={onEditar}>Editar grupo</button><button className="btn btn-danger" type="button" onClick={() => setConfirmando(true)}>Cancelar grupo</button></section>}
     {podeGerenciar && confirmando && <section className="card confirmation" role="dialog" aria-labelledby="titulo-cancelamento"><h2 id="titulo-cancelamento">Cancelar este grupo?</h2><p>O grupo será cancelado, mas não será excluído. Depois disso, não será possível editar ou cancelar novamente.</p><button className="btn btn-danger-solid" type="button" disabled={carregando} onClick={confirmarCancelamento}>{carregando ? "Cancelando..." : "Sim, cancelar grupo"}</button><button className="btn btn-secondary" type="button" disabled={carregando} onClick={() => setConfirmando(false)}>Voltar</button></section>}
   </AppShell>;
