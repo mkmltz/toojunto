@@ -66,6 +66,7 @@ export interface ProgressoGrupo {
   total_ciclos: number;
   contemplado_ciclo_atual: string;
   data_prevista_ciclo_atual: string;
+  grupo_concluido?: boolean;
   ciclos: {
     numero_ciclo: number;
     nome: string;
@@ -75,13 +76,15 @@ export interface ProgressoGrupo {
   }[];
 }
 
-export type SituacaoObrigacao = "PENDENTE" | "AGUARDANDO_CONFIRMACAO" | "ATRASADO" | "CONFIRMADO";
+export type SituacaoObrigacao = "PENDENTE" | "AGUARDANDO_CONFIRMACAO" | "ATRASADO" | "CONFIRMADO" | "REJEITADO";
 
 export interface ObrigacaoPagamento {
   grupo_id: number;
   numero_ciclo: number;
   pagador_id: number;
   pagador_usuario_id: number;
+  pagamento_id?: number | null;
+  pode_avaliar?: boolean;
   pagador_nome: string;
   recebedor_id: number;
   recebedor_nome: string;

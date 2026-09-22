@@ -170,7 +170,7 @@ def obter_grupo_do_usuario(
     )
     dados_grupo = _grupo_com_papel(grupo, usuario).model_dump()
     ordem_recebimento = None
-    if grupo.status == "ATIVO":
+    if grupo.status in ("ATIVO", "ENCERRADO"):
         ordem_recebimento = [
             PosicaoSorteioResposta(
                 posicao=participante.ordem_sorteio,
@@ -202,12 +202,18 @@ def obter_progresso_grupo(
     grupo_id: int, usuario: Usuario, db: Session
 ) -> ProgressoGrupoResposta:
     detalhe = obter_grupo_do_usuario(grupo_id, usuario, db)
-    if detalhe.status != "ATIVO" or not detalhe.ordem_recebimento:
+    if detalhe.status not in ("ATIVO", "ENCERRADO") or not detalhe.ordem_recebimento:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Os ciclos ainda não estão disponíveis.",
         )
 
+    concluidos = set(db.scalars(select(Ciclo.numero).where(
+        Ciclo.grupo_id == grupo_id, Ciclo.status == "CONCLUIDO"
+    )).all())
+    grupo_concluido = detalhe.status == "ENCERRADO"
+    numero_atual = next((numero for numero in range(1, detalhe.quantidade_ciclos + 1)
+                         if numero not in concluidos), detalhe.quantidade_ciclos)
     ciclos = [
         CicloResposta(
             numero_ciclo=posicao.posicao,
@@ -215,20 +221,30 @@ def obter_progresso_grupo(
             papel=posicao.papel,
             data_prevista=posicao.data_prevista,
             situacao=(
-                SituacaoCiclo.ATUAL
-                if posicao.posicao == 1
+                SituacaoCiclo.CONCLUIDO if posicao.posicao in concluidos
+                else SituacaoCiclo.ATUAL
+                if posicao.posicao == numero_atual and not grupo_concluido
                 else SituacaoCiclo.PROXIMO
             ),
         )
         for posicao in detalhe.ordem_recebimento
     ]
     return ProgressoGrupoResposta(
-        ciclo_atual=1,
+        ciclo_atual=numero_atual,
         total_ciclos=detalhe.quantidade_ciclos,
-        contemplado_ciclo_atual=ciclos[0].nome,
-        data_prevista_ciclo_atual=ciclos[0].data_prevista,
+        contemplado_ciclo_atual=ciclos[numero_atual - 1].nome,
+        data_prevista_ciclo_atual=ciclos[numero_atual - 1].data_prevista,
         ciclos=ciclos,
+        grupo_concluido=grupo_concluido,
     )
+
+
+def _numero_ciclo_atual(grupo: Grupo, db: Session) -> int:
+    concluidos = set(db.scalars(select(Ciclo.numero).where(
+        Ciclo.grupo_id == grupo.id, Ciclo.status == "CONCLUIDO"
+    )).all())
+    return next((numero for numero in range(1, grupo.quantidade_ciclos + 1)
+                 if numero not in concluidos), grupo.quantidade_ciclos + 1)
 
 
 def _contexto_pagamentos(
@@ -249,7 +265,9 @@ def _contexto_pagamentos(
     ).all()
     if not any(p.usuario_id == usuario.id for p, _ in integrantes):
         raise HTTPException(status_code=404, detail="Grupo não encontrado.")
-    if grupo.status != "ATIVO" or numero_ciclo != 1:
+    atual = _numero_ciclo_atual(grupo, db)
+    if (grupo.status not in ("ATIVO", "ENCERRADO") or numero_ciclo < 1
+            or numero_ciclo > grupo.quantidade_ciclos or numero_ciclo > atual):
         raise HTTPException(status_code=409, detail="Ciclo indisponível para pagamentos.")
     contemplados = [(p, u) for p, u in integrantes if p.ordem_sorteio == numero_ciclo]
     if len(contemplados) != 1 or len(integrantes) != grupo.quantidade_participantes:
@@ -259,25 +277,31 @@ def _contexto_pagamentos(
 
 def _obrigacoes_pagamento(
     grupo: Grupo, integrantes: list[tuple[Participante, Usuario]],
-    contemplado: Participante, recebedor: Usuario, db: Session,
+    contemplado: Participante, recebedor: Usuario, numero_ciclo: int,
+    usuario: Usuario, db: Session,
 ) -> list[ObrigacaoPagamentoResposta]:
-    ciclo = db.scalar(select(Ciclo).where(Ciclo.grupo_id == grupo.id, Ciclo.numero == 1))
+    ciclo = db.scalar(select(Ciclo).where(Ciclo.grupo_id == grupo.id, Ciclo.numero == numero_ciclo))
     pagamentos = {
         pagamento.pagador_id: pagamento
         for pagamento in db.scalars(
             select(Pagamento).where(Pagamento.ciclo_id == ciclo.id)
         ).all()
     } if ciclo else {}
-    data_prevista = grupo.data_inicio.date()
+    data_prevista = (grupo.data_inicio + timedelta(days=(numero_ciclo - 1) * 30)).date()
     prazo = data_prevista - timedelta(days=5)
     dias_ate_data = (data_prevista - date.today()).days
     dias_ate_prazo = (prazo - date.today()).days
+    pode_avaliar_ciclo = (
+        usuario.id == recebedor.id and grupo.status == "ATIVO"
+        and numero_ciclo == _numero_ciclo_atual(grupo, db)
+    )
     return [
         ObrigacaoPagamentoResposta(
             grupo_id=grupo.id,
-            numero_ciclo=1,
+            numero_ciclo=numero_ciclo,
             pagador_id=participante.id,
             pagador_usuario_id=pagador.id,
+            pagamento_id=pagamentos[participante.id].id if participante.id in pagamentos else None,
             pagador_nome=pagador.nome,
             recebedor_id=contemplado.id,
             recebedor_nome=recebedor.nome,
@@ -286,15 +310,23 @@ def _obrigacoes_pagamento(
             prazo_pagamento=prazo,
             dias_ate_data_prevista=dias_ate_data,
             dias_ate_prazo=dias_ate_prazo,
-            alerta_prazo=1 <= dias_ate_data <= 5 and participante.id not in pagamentos,
+            alerta_prazo=1 <= dias_ate_data <= 5 and (
+                participante.id not in pagamentos or pagamentos[participante.id].status == "REJEITADO"
+            ),
             situacao=(
-                SituacaoObrigacao.ATRASADO if dias_ate_data <= 0
-                else SituacaoObrigacao.AGUARDANDO_CONFIRMACAO
-                if participante.id in pagamentos
+                SituacaoObrigacao.CONFIRMADO if participante.id in pagamentos and pagamentos[participante.id].status == "CONFIRMADO"
+                else SituacaoObrigacao.REJEITADO if participante.id in pagamentos and pagamentos[participante.id].status == "REJEITADO"
+                else SituacaoObrigacao.ATRASADO if dias_ate_data <= 0
+                else SituacaoObrigacao.AGUARDANDO_CONFIRMACAO if participante.id in pagamentos
                 else SituacaoObrigacao.PENDENTE
             ),
             status_registro=pagamentos[participante.id].status if participante.id in pagamentos else None,
             declarado_em=pagamentos[participante.id].data_pagamento if participante.id in pagamentos else None,
+            pode_avaliar=(
+                pode_avaliar_ciclo
+                and participante.id in pagamentos
+                and pagamentos[participante.id].status == "AGUARDANDO_CONFIRMACAO"
+            ),
         )
         for participante, pagador in integrantes
         if participante.id != contemplado.id
@@ -307,7 +339,7 @@ def listar_obrigacoes_pagamento(
     grupo, integrantes, contemplado, recebedor = _contexto_pagamentos(
         grupo_id, numero_ciclo, usuario, db
     )
-    return _obrigacoes_pagamento(grupo, integrantes, contemplado, recebedor, db)
+    return _obrigacoes_pagamento(grupo, integrantes, contemplado, recebedor, numero_ciclo, usuario, db)
 
 
 def declarar_pagamento(
@@ -316,13 +348,16 @@ def declarar_pagamento(
     grupo, integrantes, contemplado, recebedor = _contexto_pagamentos(
         grupo_id, numero_ciclo, usuario, db, bloquear=True
     )
+    if grupo.status != "ATIVO" or numero_ciclo != _numero_ciclo_atual(grupo, db):
+        raise HTTPException(status_code=409, detail="Ciclo indisponível para pagamentos.")
     pagador = next(p for p, u in integrantes if u.id == usuario.id)
     if pagador.id == contemplado.id:
         raise HTTPException(status_code=409, detail="O contemplado não possui pagamento neste ciclo.")
     ciclo = db.scalar(select(Ciclo).where(Ciclo.grupo_id == grupo.id, Ciclo.numero == numero_ciclo))
-    if ciclo and db.scalar(select(Pagamento.id).where(
+    pagamento_existente = db.scalar(select(Pagamento).where(
         Pagamento.ciclo_id == ciclo.id, Pagamento.pagador_id == pagador.id
-    )):
+    )) if ciclo else None
+    if pagamento_existente and pagamento_existente.status != "REJEITADO":
         raise HTTPException(status_code=409, detail="Pagamento já declarado neste ciclo.")
     try:
         if ciclo is None:
@@ -331,18 +366,75 @@ def declarar_pagamento(
                           status="ABERTO")
             db.add(ciclo)
             db.flush()
-        db.add(Pagamento(
-            ciclo_id=ciclo.id, pagador_id=pagador.id, recebedor_id=contemplado.id,
-            valor=grupo.valor_cota, status="AGUARDANDO_CONFIRMACAO",
-            data_pagamento=datetime.utcnow(),
-        ))
+        if pagamento_existente:
+            pagamento_existente.status = "AGUARDANDO_CONFIRMACAO"
+            pagamento_existente.data_pagamento = datetime.utcnow()
+        else:
+            db.add(Pagamento(
+                ciclo_id=ciclo.id, pagador_id=pagador.id, recebedor_id=contemplado.id,
+                valor=grupo.valor_cota, status="AGUARDANDO_CONFIRMACAO",
+                data_pagamento=datetime.utcnow(),
+            ))
         db.commit()
     except Exception:
         db.rollback()
         raise
     return next(o for o in _obrigacoes_pagamento(
-        grupo, integrantes, contemplado, recebedor, db
+        grupo, integrantes, contemplado, recebedor, numero_ciclo, usuario, db
     ) if o.pagador_id == pagador.id)
+
+
+def avaliar_pagamento(
+    grupo_id: int, numero_ciclo: int, pagamento_id: int,
+    usuario: Usuario, confirmar: bool, db: Session,
+) -> ObrigacaoPagamentoResposta:
+    grupo, integrantes, contemplado, recebedor = _contexto_pagamentos(
+        grupo_id, numero_ciclo, usuario, db, bloquear=True
+    )
+    if usuario.id != recebedor.id:
+        raise HTTPException(status_code=403, detail="Somente o contemplado pode avaliar pagamentos.")
+    if grupo.status != "ATIVO" or numero_ciclo != _numero_ciclo_atual(grupo, db):
+        raise HTTPException(status_code=409, detail="Ciclo indisponível para pagamentos.")
+    ciclo = db.scalar(select(Ciclo).where(Ciclo.grupo_id == grupo_id, Ciclo.numero == numero_ciclo))
+    if ciclo is None:
+        raise HTTPException(status_code=404, detail="Pagamento não encontrado.")
+    pagamento = db.scalar(select(Pagamento).where(
+        Pagamento.id == pagamento_id,
+        Pagamento.ciclo_id == ciclo.id,
+    ))
+    if pagamento is None or pagamento.recebedor_id != contemplado.id:
+        raise HTTPException(status_code=404, detail="Pagamento não encontrado.")
+    if pagamento.status != "AGUARDANDO_CONFIRMACAO":
+        raise HTTPException(status_code=409, detail="Pagamento não aguarda confirmação.")
+
+    try:
+        pagamento.status = "CONFIRMADO" if confirmar else "REJEITADO"
+        db.flush()
+        if confirmar:
+            confirmados = db.scalar(select(func.count(func.distinct(Pagamento.pagador_id))).where(
+                Pagamento.ciclo_id == ciclo.id, Pagamento.status == "CONFIRMADO"
+            ))
+            if confirmados == grupo.quantidade_participantes - 1:
+                ciclo.status = "CONCLUIDO"
+                proximo_numero = numero_ciclo + 1
+                if proximo_numero <= grupo.quantidade_ciclos:
+                    proximo_contemplado = next(
+                        p for p, _ in integrantes if p.ordem_sorteio == proximo_numero
+                    )
+                    db.add(Ciclo(
+                        grupo_id=grupo.id, numero=proximo_numero,
+                        data=grupo.data_inicio + timedelta(days=(proximo_numero - 1) * 30),
+                        contemplado_id=proximo_contemplado.id, status="ABERTO",
+                    ))
+                else:
+                    grupo.status = "ENCERRADO"
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return next(o for o in _obrigacoes_pagamento(
+        grupo, integrantes, contemplado, recebedor, numero_ciclo, usuario, db
+    ) if o.pagamento_id == pagamento_id)
 
 
 def _buscar_grupo_gerenciavel(

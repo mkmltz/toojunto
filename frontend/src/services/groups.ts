@@ -31,6 +31,12 @@ export const informarPagamento = (grupoId: number, ciclo: number, token: string)
     headers: { Authorization: `Bearer ${token}` },
   });
 
+export const avaliarPagamento = (grupoId: number, ciclo: number, pagamentoId: number, acao: "confirm" | "reject", token: string) =>
+  requisicao<ObrigacaoPagamento>(`/groups/${grupoId}/cycles/${ciclo}/payments/${pagamentoId}/${acao}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
 export const atualizarGrupo = (grupoId: number, dados: GrupoAtualizacaoDados, token: string) => requisicao<Grupo>(`/groups/${grupoId}`, {
   method: "PATCH",
   headers: { Authorization: `Bearer ${token}` },

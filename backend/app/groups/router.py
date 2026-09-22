@@ -25,6 +25,7 @@ from .service import (
     obter_progresso_grupo,
     listar_obrigacoes_pagamento,
     declarar_pagamento,
+    avaliar_pagamento,
     preparar_sorteio,
     realizar_sorteio,
 )
@@ -95,6 +96,30 @@ def registrar_pagamento_do_ciclo(
     db: Session = Depends(get_db),
 ):
     return declarar_pagamento(group_id, cycle_number, usuario, db)
+
+
+@router.post(
+    "/{group_id}/cycles/{cycle_number}/payments/{payment_id}/confirm",
+    response_model=ObrigacaoPagamentoResposta,
+)
+def confirmar_pagamento_do_ciclo(
+    group_id: int, cycle_number: int, payment_id: int,
+    usuario: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return avaliar_pagamento(group_id, cycle_number, payment_id, usuario, True, db)
+
+
+@router.post(
+    "/{group_id}/cycles/{cycle_number}/payments/{payment_id}/reject",
+    response_model=ObrigacaoPagamentoResposta,
+)
+def rejeitar_pagamento_do_ciclo(
+    group_id: int, cycle_number: int, payment_id: int,
+    usuario: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return avaliar_pagamento(group_id, cycle_number, payment_id, usuario, False, db)
 
 
 @router.post(

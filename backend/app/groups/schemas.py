@@ -151,11 +151,14 @@ class ProgressoGrupoResposta(BaseModel):
     contemplado_ciclo_atual: str
     data_prevista_ciclo_atual: date
     ciclos: list[CicloResposta]
+    grupo_concluido: bool = False
 
 
 class SituacaoObrigacao(str, Enum):
     PENDENTE = "PENDENTE"
     AGUARDANDO_CONFIRMACAO = "AGUARDANDO_CONFIRMACAO"
+    CONFIRMADO = "CONFIRMADO"
+    REJEITADO = "REJEITADO"
     ATRASADO = "ATRASADO"
 
 
@@ -168,6 +171,7 @@ class ObrigacaoPagamentoResposta(BaseModel):
     numero_ciclo: int
     pagador_id: int
     pagador_usuario_id: int
+    pagamento_id: int | None
     pagador_nome: str
     recebedor_id: int
     recebedor_nome: str
@@ -180,6 +184,7 @@ class ObrigacaoPagamentoResposta(BaseModel):
     situacao: SituacaoObrigacao
     status_registro: str | None
     declarado_em: datetime | None
+    pode_avaliar: bool = False
 
 
 class ConviteResposta(BaseModel):

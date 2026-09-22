@@ -299,3 +299,129 @@ def test_us011_declaracoes_concorrentes_nao_duplicam(contexto):
     with ThreadPoolExecutor(max_workers=2) as executor:
         resultados = list(executor.map(declarar, range(2)))
     assert sorted(resultados) == [201, 409]
+
+
+def _pagamentos_do_ciclo(grupo_id, numero, usuarios):
+    caminho = f"/groups/{grupo_id}/cycles/{numero}/payments"
+    resposta = client.get(caminho, headers=headers(usuarios[0]))
+    assert resposta.status_code == 200
+    return caminho, resposta.json()
+
+
+def test_us012_rejeicao_nova_declaracao_e_permissoes(contexto):
+    gestor, pagador, terceiro, externo = contexto
+    grupo, _ = preparar_grupo(contexto)
+    assert client.post(f"/groups/{grupo['id']}/draw", headers=headers(gestor)).status_code == 200
+    caminho, _ = _pagamentos_do_ciclo(grupo["id"], 1, contexto)
+    declaracao = client.post(caminho, headers=headers(pagador)).json()
+    pagamento_id = declaracao["pagamento_id"]
+    rejeitar = f"{caminho}/{pagamento_id}/reject"
+    confirmar = f"{caminho}/{pagamento_id}/confirm"
+    assert declaracao["pode_avaliar"] is False
+    assert client.get(caminho, headers=headers(gestor)).json()[0]["pode_avaliar"] is True
+    assert client.post(confirmar).status_code == 401
+    assert client.post(confirmar, headers=headers(externo)).status_code == 404
+    assert client.post(confirmar, headers=headers(pagador)).status_code == 403
+    assert client.post(confirmar, headers=headers(terceiro)).status_code == 403
+    assert client.post(rejeitar, headers=headers(gestor)).json()["status_registro"] == "REJEITADO"
+    assert client.post(rejeitar, headers=headers(gestor)).status_code == 409
+    rejeitada = client.get(caminho, headers=headers(terceiro)).json()[0]
+    assert rejeitada["situacao"] == "REJEITADO"
+    assert rejeitada["pagamento_id"] == pagamento_id
+    nova = client.post(caminho, headers=headers(pagador))
+    assert nova.status_code == 201
+    assert nova.json()["pagamento_id"] == pagamento_id
+    assert nova.json()["status_registro"] == "AGUARDANDO_CONFIRMACAO"
+    assert client.post(confirmar, headers=headers(gestor)).json()["situacao"] == "CONFIRMADO"
+    assert client.post(confirmar, headers=headers(gestor)).status_code == 409
+    assert client.get(f"/groups/{grupo['id']}/cycles", headers=headers(gestor)).json()["ciclo_atual"] == 1
+
+
+def test_us012_conclusao_avanco_e_encerramento(contexto):
+    gestor, primeiro, segundo, _ = contexto
+    usuarios_por_nome = {u.nome: u for u in (gestor, primeiro, segundo)}
+    grupo, inicio = preparar_grupo(contexto)
+    sorteio = client.post(f"/groups/{grupo['id']}/draw", headers=headers(gestor)).json()
+    ordem = sorteio["ordem_recebimento"]
+    for numero in (1, 2, 3):
+        contemplado = usuarios_por_nome[ordem[numero - 1]["nome"]]
+        caminho, obrigacoes = _pagamentos_do_ciclo(grupo["id"], numero, contexto)
+        assert len(obrigacoes) == 2
+        assert all(o["recebedor_nome"] == contemplado.nome for o in obrigacoes)
+        assert all(o["data_prevista"] == (inicio + timedelta(days=(numero - 1) * 30)).isoformat() for o in obrigacoes)
+        for indice, obrigacao in enumerate(obrigacoes):
+            pagador = usuarios_por_nome[obrigacao["pagador_nome"]]
+            declarada = client.post(caminho, headers=headers(pagador))
+            assert declarada.status_code == 201
+            pagamento_id = declarada.json()["pagamento_id"]
+            assert client.post(f"{caminho}/{pagamento_id}/confirm", headers=headers(gestor if contemplado != gestor else pagador)).status_code == 403
+            confirmada = client.post(f"{caminho}/{pagamento_id}/confirm", headers=headers(contemplado))
+            assert confirmada.status_code == 200
+            assert confirmada.json()["status_registro"] == "CONFIRMADO"
+            progresso = client.get(f"/groups/{grupo['id']}/cycles", headers=headers(pagador)).json()
+            if indice == 0:
+                assert progresso["ciclo_atual"] == numero
+                assert progresso["ciclos"][numero - 1]["situacao"] == "ATUAL"
+            elif numero < 3:
+                assert progresso["ciclo_atual"] == numero + 1
+                assert progresso["ciclos"][numero - 1]["situacao"] == "CONCLUIDO"
+                assert progresso["ciclos"][numero]["situacao"] == "ATUAL"
+            else:
+                assert progresso["grupo_concluido"] is True
+                assert all(c["situacao"] == "CONCLUIDO" for c in progresso["ciclos"])
+                assert client.get(f"/groups/{grupo['id']}", headers=headers(pagador)).json()["status"] == "ENCERRADO"
+        assert client.post(caminho, headers=headers(usuarios_por_nome[obrigacoes[0]["pagador_nome"]])).status_code == 409
+    db = SessionLocal()
+    try:
+        ciclos = db.scalars(select(Ciclo).where(Ciclo.grupo_id == grupo["id"]).order_by(Ciclo.numero)).all()
+        assert [c.numero for c in ciclos] == [1, 2, 3]
+        assert all(c.status == "CONCLUIDO" for c in ciclos)
+    finally:
+        db.close()
+
+
+def test_us012_confirmacoes_concorrentes_avancam_uma_vez(contexto):
+    gestor, primeiro, segundo, _ = contexto
+    grupo, _ = preparar_grupo(contexto)
+    assert client.post(f"/groups/{grupo['id']}/draw", headers=headers(gestor)).status_code == 200
+    caminho, _ = _pagamentos_do_ciclo(grupo["id"], 1, contexto)
+    ids = [client.post(caminho, headers=headers(usuario)).json()["pagamento_id"] for usuario in (primeiro, segundo)]
+    barreira = Barrier(2)
+
+    def confirmar(pagamento_id):
+        with TestClient(app) as cliente:
+            barreira.wait()
+            return cliente.post(f"{caminho}/{pagamento_id}/confirm", headers=headers(gestor)).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        resultados = list(executor.map(confirmar, ids))
+    assert resultados == [200, 200]
+    progresso = client.get(f"/groups/{grupo['id']}/cycles", headers=headers(gestor)).json()
+    assert progresso["ciclo_atual"] == 2
+    db = SessionLocal()
+    try:
+        ciclos = db.scalars(select(Ciclo).where(Ciclo.grupo_id == grupo["id"])).all()
+        assert sorted(c.numero for c in ciclos) == [1, 2]
+    finally:
+        db.close()
+
+
+def test_us012_confirmacao_repetida_concorrente_nao_antecipa_ciclo(contexto):
+    gestor, pagador, _, _ = contexto
+    grupo, _ = preparar_grupo(contexto)
+    assert client.post(f"/groups/{grupo['id']}/draw", headers=headers(gestor)).status_code == 200
+    caminho, _ = _pagamentos_do_ciclo(grupo["id"], 1, contexto)
+    pagamento_id = client.post(caminho, headers=headers(pagador)).json()["pagamento_id"]
+    barreira = Barrier(2)
+
+    def confirmar(_):
+        with TestClient(app) as cliente:
+            barreira.wait()
+            return cliente.post(f"{caminho}/{pagamento_id}/confirm", headers=headers(gestor)).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        resultados = list(executor.map(confirmar, range(2)))
+    assert sorted(resultados) == [200, 409]
+    progresso = client.get(f"/groups/{grupo['id']}/cycles", headers=headers(gestor)).json()
+    assert progresso["ciclo_atual"] == 1
+    assert progresso["ciclos"][0]["situacao"] == "ATUAL"

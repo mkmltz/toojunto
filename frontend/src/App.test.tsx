@@ -721,6 +721,181 @@ describe("US-011", () => {
   });
 });
 
+describe("US-012", () => {
+  const ativo = grupo({ status: "ATIVO", quantidade_ciclos: 2 });
+  const progresso = {
+    ciclo_atual: 1, total_ciclos: 2, contemplado_ciclo_atual: "Ana Souza",
+    data_prevista_ciclo_atual: "2026-10-10", grupo_concluido: false,
+    ciclos: [
+      { numero_ciclo: 1, nome: "Ana Souza", papel: "GESTOR", data_prevista: "2026-10-10", situacao: "ATUAL" },
+      { numero_ciclo: 2, nome: "Bruno Lima", papel: "PARTICIPANTE", data_prevista: "2026-11-09", situacao: "PROXIMO" },
+    ],
+  };
+  const pagamento = {
+    grupo_id: 1, numero_ciclo: 1, pagador_id: 42, pagador_usuario_id: 2,
+    pagamento_id: 77, pode_avaliar: true, pagador_nome: "Bruno Lima",
+    recebedor_id: 8, recebedor_nome: "Ana Souza", valor: "200.00",
+    data_prevista: "2026-10-10", prazo_pagamento: "2026-10-05",
+    dias_ate_data_prevista: 5, dias_ate_prazo: 0, alerta_prazo: false,
+    situacao: "AGUARDANDO_CONFIRMACAO", status_registro: "AGUARDANDO_CONFIRMACAO", declarado_em: "2026-09-22T10:00:00",
+  };
+  const caminho = "http://127.0.0.1:8000/groups/1/cycles/1/payments/77";
+
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  beforeEach(() => { localStorage.clear(); vi.stubGlobal("fetch", vi.fn()); });
+
+  async function abrirComPagamentos(obrigacoes: unknown[]) {
+    await autenticar([ativo]);
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(ativo)).mockResolvedValueOnce(resposta(progresso)).mockResolvedValueOnce(resposta(obrigacoes));
+    fireEvent.click(screen.getByRole("button", { name: "Ver grupo" }));
+    return screen.findByRole("region", { name: "Pagamentos do ciclo atual" });
+  }
+
+  it("mostra ações só para pagamento avaliável; confirmação exige aceite e atualiza o estado", async () => {
+    const semPermissao = { ...pagamento, pagador_id: 43, pagamento_id: 78, pagador_nome: "Carla", pode_avaliar: false };
+    const area = await abrirComPagamentos([pagamento, semPermissao]);
+    const itens = within(area).getAllByRole("listitem");
+    expect(within(itens[0]).getByRole("button", { name: "Confirmar" })).toBeInTheDocument();
+    expect(within(itens[0]).getByRole("button", { name: "Rejeitar" })).toBeInTheDocument();
+    expect(within(itens[1]).queryByRole("button", { name: "Confirmar" })).not.toBeInTheDocument();
+    fireEvent.click(within(itens[0]).getByRole("button", { name: "Confirmar" }));
+    const dialogo = screen.getByRole("dialog", { name: "Confirmar recebimento?" });
+    expect(dialogo).toHaveTextContent("Você confirma que recebeu o pagamento de Bruno Lima no valor de R$ 200,00?");
+    expect(within(dialogo).getByRole("button", { name: "Cancelar" })).toHaveFocus();
+    fireEvent.click(within(dialogo).getByRole("button", { name: "Cancelar" }));
+    expect(fetch).not.toHaveBeenCalledWith(`${caminho}/confirm`, expect.anything());
+    fireEvent.click(within(itens[0]).getByRole("button", { name: "Confirmar" }));
+    const confirmado = { ...pagamento, situacao: "CONFIRMADO", status_registro: "CONFIRMADO", pode_avaliar: false };
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(confirmado)).mockResolvedValueOnce(resposta(progresso)).mockResolvedValueOnce(resposta([confirmado, semPermissao]));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Confirmar recebimento?" })).getByRole("button", { name: "Sim, recebi" }));
+    await waitFor(() => expect(within(itens[0]).getByText("Confirmado")).toBeInTheDocument());
+    expect(screen.queryByRole("dialog", { name: "Confirmar recebimento?" })).not.toBeInTheDocument();
+    expect(within(itens[0]).queryByRole("button", { name: "Confirmar" })).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(`${caminho}/confirm`, expect.objectContaining({ method: "POST" }));
+  });
+
+  it("rejeita após confirmação na modal e mostra estado rejeitado", async () => {
+    const area = await abrirComPagamentos([pagamento]);
+    fireEvent.click(within(area).getByRole("button", { name: "Rejeitar" }));
+    const dialogo = screen.getByRole("dialog", { name: "Rejeitar pagamento?" });
+    expect(dialogo).toHaveTextContent("Você está informando que ainda não recebeu o pagamento de Bruno Lima.");
+    expect(dialogo).toHaveTextContent("O participante poderá informar o pagamento novamente.");
+    fireEvent.click(within(dialogo).getByRole("button", { name: "Cancelar" }));
+    expect(fetch).not.toHaveBeenCalledWith(`${caminho}/reject`, expect.anything());
+    fireEvent.click(within(area).getByRole("button", { name: "Rejeitar" }));
+    const rejeitado = { ...pagamento, situacao: "REJEITADO", status_registro: "REJEITADO", pode_avaliar: false };
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(rejeitado)).mockResolvedValueOnce(resposta(progresso)).mockResolvedValueOnce(resposta([rejeitado]));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Rejeitar pagamento?" })).getByRole("button", { name: "Rejeitar pagamento" }));
+    await waitFor(() => expect(within(area).getByText("Rejeitado")).toBeInTheDocument());
+    expect(within(area).getByRole("listitem")).toHaveClass("payment-rejeitado");
+    expect(fetch).toHaveBeenCalledWith(`${caminho}/reject`, expect.objectContaining({ method: "POST" }));
+  });
+
+  it("usa o progresso atualizado para mostrar o próximo ciclo e suas obrigações", async () => {
+    const area = await abrirComPagamentos([pagamento]);
+    fireEvent.click(within(area).getByRole("button", { name: "Confirmar" }));
+    const confirmado = { ...pagamento, situacao: "CONFIRMADO", status_registro: "CONFIRMADO", pode_avaliar: false };
+    const avancado = { ...progresso, ciclo_atual: 2, contemplado_ciclo_atual: "Bruno Lima", data_prevista_ciclo_atual: "2026-11-09", ciclos: [
+      { ...progresso.ciclos[0], situacao: "CONCLUIDO" }, { ...progresso.ciclos[1], situacao: "ATUAL" },
+    ] };
+    const novaObrigacao = { ...pagamento, numero_ciclo: 2, pagador_id: 44, pagador_usuario_id: 1, pagamento_id: null, pode_avaliar: false, pagador_nome: "Ana Souza", recebedor_nome: "Bruno Lima", situacao: "PENDENTE", status_registro: null };
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(confirmado)).mockResolvedValueOnce(resposta(avancado)).mockResolvedValueOnce(resposta([novaObrigacao]));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Confirmar recebimento?" })).getByRole("button", { name: "Sim, recebi" }));
+    expect(await screen.findByText("Ciclo 2 de 2")).toBeInTheDocument();
+    const calendario = screen.getByRole("region", { name: "Progresso do grupo" });
+    expect(within(calendario).getAllByRole("listitem")[0]).toHaveClass("cycle-concluido");
+    expect(within(calendario).getAllByRole("listitem")[1]).toHaveClass("cycle-atual");
+    expect(await screen.findByText("Ana Souza (você)")).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/cycles/2/payments", expect.anything());
+  });
+
+  it("mostra Grupo concluído e oculta ações após o último ciclo", async () => {
+    const area = await abrirComPagamentos([pagamento]);
+    fireEvent.click(within(area).getByRole("button", { name: "Confirmar" }));
+    const confirmado = { ...pagamento, situacao: "CONFIRMADO", status_registro: "CONFIRMADO", pode_avaliar: false };
+    const encerrado = { ...progresso, grupo_concluido: true, ciclo_atual: 2, ciclos: progresso.ciclos.map((ciclo) => ({ ...ciclo, situacao: "CONCLUIDO" })) };
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(confirmado)).mockResolvedValueOnce(resposta(encerrado)).mockResolvedValueOnce(resposta([confirmado]));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Confirmar recebimento?" })).getByRole("button", { name: "Sim, recebi" }));
+    expect(await screen.findByText(/Todos os ciclos e pagamentos deste Grupo foram concluídos/)).toBeInTheDocument();
+    expect(screen.queryByText("Ciclo 2 de 2")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Progresso do grupo" })).getAllByRole("listitem").every((item) => item.classList.contains("cycle-concluido"))).toBe(true);
+    expect(screen.queryByRole("button", { name: "Confirmar" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Informar pagamento" })).not.toBeInTheDocument();
+  });
+
+  it("bloqueia confirmações repetidas durante a requisição", async () => {
+    const area = await abrirComPagamentos([pagamento]);
+    fireEvent.click(within(area).getByRole("button", { name: "Confirmar" }));
+    let resolver!: (valor: Response) => void;
+    const confirmado = { ...pagamento, situacao: "CONFIRMADO", status_registro: "CONFIRMADO", pode_avaliar: false };
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise<Response>((resolve) => { resolver = resolve; })).mockResolvedValueOnce(resposta(progresso)).mockResolvedValueOnce(resposta([confirmado]));
+    const dialogo = screen.getByRole("dialog", { name: "Confirmar recebimento?" });
+    const botao = within(dialogo).getByRole("button", { name: "Sim, recebi" });
+    fireEvent.click(botao);
+    expect(within(dialogo).getByRole("button", { name: "Enviando..." })).toBeDisabled();
+    fireEvent.click(botao);
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => url === `${caminho}/confirm`)).toHaveLength(1);
+    await act(async () => { resolver(resposta(confirmado)); });
+    expect(screen.queryByRole("dialog", { name: "Confirmar recebimento?" })).not.toBeInTheDocument();
+  });
+
+  it("mantém a modal e permite tentar novamente após erro de avaliação", async () => {
+    const area = await abrirComPagamentos([pagamento]);
+    fireEvent.click(within(area).getByRole("button", { name: "Rejeitar" }));
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Falha" }, 500));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Rejeitar pagamento?" })).getByRole("button", { name: "Rejeitar pagamento" }));
+    const dialogo = screen.getByRole("dialog", { name: "Rejeitar pagamento?" });
+    expect(await within(dialogo).findByRole("alert")).toHaveTextContent("Não foi possível avaliar o pagamento.");
+    expect(within(area).getByText("Aguardando confirmação")).toBeInTheDocument();
+    const rejeitado = { ...pagamento, situacao: "REJEITADO", status_registro: "REJEITADO", pode_avaliar: false };
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(rejeitado)).mockResolvedValueOnce(resposta(progresso)).mockResolvedValueOnce(resposta([rejeitado]));
+    fireEvent.click(within(dialogo).getByRole("button", { name: "Rejeitar pagamento" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Rejeitar pagamento?" })).not.toBeInTheDocument());
+    expect(await within(area).findByText("Rejeitado")).toBeInTheDocument();
+  });
+
+  it("mostra o estado ENCERRADO na lista e ao reabrir o Grupo", async () => {
+    const encerrado = grupo({ status: "ENCERRADO" });
+    await autenticar([encerrado]);
+    expect(screen.getByText("Grupo concluído")).toHaveClass("finished");
+    const final = { ...progresso, grupo_concluido: true, ciclo_atual: 2, ciclos: progresso.ciclos.map((ciclo) => ({ ...ciclo, situacao: "CONCLUIDO" })) };
+    const confirmado = { ...pagamento, situacao: "CONFIRMADO", status_registro: "CONFIRMADO", pode_avaliar: false };
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(encerrado)).mockResolvedValueOnce(resposta(final)).mockResolvedValueOnce(resposta([confirmado]));
+    fireEvent.click(screen.getByRole("button", { name: "Ver grupo" }));
+    expect(await screen.findByText(/Todos os ciclos e pagamentos deste Grupo foram concluídos/)).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Pagamentos do último ciclo" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Confirmar" })).not.toBeInTheDocument();
+  });
+
+  it("usa badges distintos para sorteio realizado e Grupo concluído em Meus Grupos", async () => {
+    await autenticar([
+      grupo({ id: 1, status: "ATIVO" }),
+      grupo({ id: 2, status: "ENCERRADO" }),
+      grupo({ id: 3, vagas_disponiveis: 0 }),
+    ]);
+    const lista = screen.getByRole("region", { name: "Meus Grupos" });
+    expect(within(lista).getByText("Sorteio realizado")).toHaveClass("drawn");
+    expect(within(lista).getByText("Grupo concluído")).toHaveClass("finished");
+    expect(within(lista).getByText("Grupo completo")).toHaveClass("complete");
+  });
+
+  it("permite ao pagador informar novamente um pagamento rejeitado", async () => {
+    const participante = grupo({ status: "ATIVO", papel: "PARTICIPANTE", gestor_id: 9 });
+    const rejeitado = { ...pagamento, pagador_usuario_id: 1, pagador_nome: "Ana Souza", recebedor_nome: "Maria", situacao: "REJEITADO", status_registro: "REJEITADO", pode_avaliar: false };
+    await autenticar([participante]);
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(participante)).mockResolvedValueOnce(resposta({ ...progresso, contemplado_ciclo_atual: "Maria" })).mockResolvedValueOnce(resposta([rejeitado]));
+    fireEvent.click(screen.getByRole("button", { name: "Ver grupo" }));
+    const area = await screen.findByRole("region", { name: "Pagamentos do ciclo atual" });
+    expect(within(area).getByText("Rejeitado")).toBeInTheDocument();
+    fireEvent.click(within(area).getByRole("button", { name: "Informar pagamento" }));
+    const novaDeclaracao = { ...rejeitado, situacao: "AGUARDANDO_CONFIRMACAO", status_registro: "AGUARDANDO_CONFIRMACAO" };
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(novaDeclaracao)).mockResolvedValueOnce(resposta([novaDeclaracao]));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Confirmar pagamento" })).getByRole("button", { name: "Sim, já paguei" }));
+    expect(await within(area).findByText("Aguardando confirmação")).toBeInTheDocument();
+    expect(within(area).queryByRole("button", { name: "Informar pagamento" })).not.toBeInTheDocument();
+  });
+});
+
 describe("US-006", () => {
   const conviteRecebido = {
     group_name: "Grupo Convidado",
