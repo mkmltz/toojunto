@@ -20,6 +20,7 @@ from .service import (
     listar_grupos_do_usuario,
     obter_grupo_do_usuario,
     preparar_sorteio,
+    realizar_sorteio,
 )
 
 
@@ -43,6 +44,7 @@ def listar_grupos(
 @router.get(
     "/{group_id}",
     response_model=GrupoDetalheResposta,
+    response_model_exclude_none=True,
 )
 def consultar_grupo(
     group_id: int,
@@ -112,3 +114,17 @@ def preparar_sorteio_do_grupo(
     db: Session = Depends(get_db),
 ):
     return preparar_sorteio(group_id, usuario, db)
+
+
+@router.post(
+    "/{group_id}/draw",
+    response_model=GrupoDetalheResposta,
+    response_model_exclude_none=True,
+)
+def sortear_grupo(
+    group_id: int,
+    usuario: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    realizar_sorteio(group_id, usuario, db)
+    return obter_grupo_do_usuario(group_id, usuario, db)

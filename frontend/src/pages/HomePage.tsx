@@ -10,6 +10,7 @@ function situacaoGrupo(grupo: GrupoLista) {
     ? { texto: "Grupo completo", classe: "complete" }
     : { texto: "Em formação", classe: "forming" };
   if (grupo.status === "SORTEIO") return { texto: "Pronto para sorteio", classe: "ready" };
+  if (grupo.status === "ATIVO") return { texto: "Sorteio realizado", classe: "drawn" };
   if (grupo.status === "CANCELADO") return { texto: "Cancelado", classe: "danger" };
   return { texto: grupo.status, classe: "" };
 }

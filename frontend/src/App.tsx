@@ -9,7 +9,7 @@ import { InvitePage } from "./pages/InvitePage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ApiError, buscarUsuarioAtual, cadastrarUsuario, fazerLogin } from "./services/auth";
-import { atualizarGrupo, buscarGrupo, cancelarGrupo, criarGrupo, gerarOuObterConvite, listarGrupos, prepararSorteio } from "./services/groups";
+import { atualizarGrupo, buscarGrupo, cancelarGrupo, criarGrupo, gerarOuObterConvite, listarGrupos, prepararSorteio, realizarSorteio } from "./services/groups";
 import { aceitarConvite, consultarConvite } from "./services/invites";
 import type { Usuario } from "./types/auth";
 import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoCriacaoDados, GrupoDetalhe, GrupoLista } from "./types/groups";
@@ -282,6 +282,25 @@ export default function App() {
     } finally { setEnviando(false); }
   }
 
+  async function realizarSorteioSelecionado() {
+    if (!grupoSelecionado) return;
+    const token = localStorage.getItem(CHAVE_TOKEN);
+    if (!token) { encerrarSessao("Entre novamente para realizar o sorteio."); return; }
+    setEnviando(true);
+    try {
+      await realizarSorteio(grupoSelecionado.id, token);
+      setGrupoSelecionado(await buscarGrupo(grupoSelecionado.id, token));
+      setAvisoGrupo("Sorteio realizado. A ordem de recebimento está disponível.");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) { encerrarSessao("Sua sessão terminou. Entre novamente para continuar."); return; }
+      if (error instanceof ApiError && error.status === 409) {
+        try { setGrupoSelecionado(await buscarGrupo(grupoSelecionado.id, token)); } catch { /* mantém os últimos dados visíveis */ }
+        throw new Error("O sorteio não pôde ser realizado. Confira a situação atual do grupo.");
+      }
+      throw new Error(mensagemDeErroGrupo(error));
+    } finally { setEnviando(false); }
+  }
+
   async function obterConviteSelecionado(): Promise<ConviteGrupo> {
     if (!grupoSelecionado) throw new Error("O Grupo não está disponível.");
     const token = localStorage.getItem(CHAVE_TOKEN);
@@ -384,7 +403,7 @@ export default function App() {
   if (usuario && tela === "criar-grupo") return <CreateGroupPage nomeUsuario={usuario.nome} carregando={enviando} onVoltar={voltarParaHome} onCriar={cadastrarGrupo} />;
   if (usuario && tela === "grupo-criado" && grupoCriado) return <GroupCreatedPage nomeUsuario={usuario.nome} grupo={grupoCriado} onVoltar={voltarParaHome} onVerGrupo={() => abrirGrupo(grupoCriado.id)} />;
   if (usuario && tela === "editar-grupo" && grupoSelecionado) return <EditGroupPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} carregando={enviando} onVoltar={() => setTela("detalhes")} onSalvar={atualizarGrupoSelecionado} />;
-  if (usuario && tela === "detalhes" && grupoSelecionado) return <GroupDetailsPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarParaHome} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} onObterConvite={obterConviteSelecionado} onPrepararSorteio={prepararSorteioSelecionado} />;
+  if (usuario && tela === "detalhes" && grupoSelecionado) return <GroupDetailsPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarParaHome} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} onObterConvite={obterConviteSelecionado} onPrepararSorteio={prepararSorteioSelecionado} onRealizarSorteio={realizarSorteioSelecionado} />;
   if (usuario) return <HomePage usuario={usuario} grupos={grupos} carregando={carregandoLista} erro={erroLista || avisoGrupo} onAbrirGrupo={abrirGrupo} onCriarGrupo={() => setTela("criar-grupo")} onRecarregar={carregarGrupos} onSair={sair} />;
   return <AuthLayout>{tela === "login" ? <LoginPage aviso={aviso} carregando={enviando} onEntrar={entrar} onCadastrar={() => { setAviso(""); setTela("cadastro"); }} onVoltarConvite={conviteToken ? () => setTela("convite") : undefined} /> : <RegisterPage carregando={enviando} onVoltar={() => setTela("login")} onCadastrar={cadastrar} />}</AuthLayout>;
 }

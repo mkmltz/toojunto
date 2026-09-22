@@ -32,6 +32,11 @@ export const prepararSorteio = (grupoId: number, token: string) => requisicao<Gr
   headers: { Authorization: `Bearer ${token}` },
 });
 
+export const realizarSorteio = (grupoId: number, token: string) => requisicao<GrupoDetalhe>(`/groups/${grupoId}/draw`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${token}` },
+});
+
 export const gerarOuObterConvite = (grupoId: number, token: string) => requisicao<ConviteGrupo>(`/groups/${grupoId}/invite`, {
   method: "POST",
   headers: { Authorization: `Bearer ${token}` },

@@ -51,6 +51,12 @@ export interface FormacaoGrupo {
 
 export interface GrupoDetalhe extends GrupoComPapel {
   formacao: FormacaoGrupo;
+  ordem_recebimento?: {
+    posicao: number;
+    nome: string;
+    papel: PapelGrupo;
+    data_prevista: string;
+  }[];
 }
 
 export interface ConviteGrupo {

@@ -119,8 +119,16 @@ class FormacaoGrupoResposta(BaseModel):
     participantes: list[IntegranteGrupoResposta]
 
 
+class PosicaoSorteioResposta(BaseModel):
+    posicao: int
+    nome: str
+    papel: PapelGrupo
+    data_prevista: date
+
+
 class GrupoDetalheResposta(GrupoComPapelResposta):
     formacao: FormacaoGrupoResposta
+    ordem_recebimento: list[PosicaoSorteioResposta] | None = None
 
 
 class ConviteResposta(BaseModel):

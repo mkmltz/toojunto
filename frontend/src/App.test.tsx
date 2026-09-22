@@ -450,7 +450,7 @@ describe("US-008", () => {
     expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups/1", expect.anything());
     expect(screen.getByText("Formação encerrada. O grupo está pronto para o sorteio.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Preparar sorteio" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Realizar sorteio" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Realizar sorteio" })).toBeInTheDocument();
     cleanup(); localStorage.clear();
     await abrirDetalhes(grupo({ ...preparado, papel: "PARTICIPANTE" }));
     expect(screen.getByText("Formação encerrada. O grupo está pronto para o sorteio.")).toBeInTheDocument();
@@ -466,6 +466,79 @@ describe("US-008", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("O grupo mudou e não pôde ser preparado.");
     expect(screen.getByText("Faltam 8 pessoas para completar o Grupo.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Preparar sorteio" })).not.toBeInTheDocument();
+  });
+});
+
+describe("US-009", () => {
+  const preparado = grupo({ status: "SORTEIO", vagas_disponiveis: 0 });
+  const sorteado = grupo({
+    status: "ATIVO",
+    vagas_disponiveis: 0,
+    ordem_recebimento: [
+      { posicao: 1, nome: "Ana Souza", papel: "GESTOR", data_prevista: "2026-10-10" },
+      { posicao: 2, nome: "Bruno Lima", papel: "PARTICIPANTE", data_prevista: "2026-11-09" },
+    ],
+  });
+
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  beforeEach(() => { localStorage.clear(); vi.stubGlobal("fetch", vi.fn()); });
+
+  it("pede confirmação e só então chama POST e recarrega o resultado", async () => {
+    await abrirDetalhes(preparado);
+    const chamadas = vi.mocked(fetch).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Realizar sorteio" }));
+    const dialogo = screen.getByRole("dialog", { name: "Realizar sorteio?" });
+    expect(dialogo).toHaveTextContent("Você ficará com a 1ª posição");
+    expect(dialogo).toHaveTextContent("As demais pessoas serão sorteadas");
+    expect(dialogo).toHaveTextContent("não poderá ser alterado");
+    expect(fetch).toHaveBeenCalledTimes(chamadas);
+    fireEvent.click(within(dialogo).getByRole("button", { name: "Cancelar" }));
+    expect(fetch).toHaveBeenCalledTimes(chamadas);
+
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(sorteado)).mockResolvedValueOnce(resposta(sorteado));
+    fireEvent.click(screen.getByRole("button", { name: "Realizar sorteio" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Realizar sorteio?" })).getByRole("button", { name: "Realizar sorteio" }));
+    expect(await screen.findByRole("heading", { name: "Ordem de recebimento" })).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/draw", expect.objectContaining({ method: "POST", headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
+    expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups/1", expect.anything());
+    const ordem = screen.getByRole("region", { name: "Ordem de recebimento" });
+    expect(within(ordem).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "1ºAna Souza — GestorRecebe em 10/10/2026",
+      "2ºBruno LimaRecebe em 09/11/2026",
+    ]);
+    expect(screen.getByText("Sorteio realizado")).toHaveClass("drawn");
+    expect(screen.queryByRole("button", { name: "Realizar sorteio" })).not.toBeInTheDocument();
+  });
+
+  it("mostra a mesma ordem após recarregar e oculta a ação do participante", async () => {
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    localStorage.setItem("toojunto_selected_group_id", "1");
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(usuario)).mockResolvedValueOnce(resposta(grupo({ ...sorteado, papel: "PARTICIPANTE" })));
+    render(<App />);
+    const ordem = await screen.findByRole("region", { name: "Ordem de recebimento" });
+    expect(within(ordem).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(ordem).getByText("Recebe em 09/11/2026")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Realizar sorteio" })).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/draw", expect.anything());
+  });
+
+  it("atualiza o resultado após conflito sem mostrar novo botão", async () => {
+    await abrirDetalhes(preparado);
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "O sorteio já ocorreu." }, 409)).mockResolvedValueOnce(resposta(sorteado));
+    fireEvent.click(screen.getByRole("button", { name: "Realizar sorteio" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Realizar sorteio?" })).getByRole("button", { name: "Realizar sorteio" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("O sorteio não pôde ser realizado.");
+    expect(screen.getByRole("heading", { name: "Ordem de recebimento" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Realizar sorteio" })).not.toBeInTheDocument();
+  });
+
+  it("mostra Sorteio realizado na lista para ambos os papéis", async () => {
+    await autenticar([sorteado, grupo({ ...sorteado, id: 2, papel: "PARTICIPANTE" })]);
+    const badges = screen.getAllByText("Sorteio realizado");
+    expect(badges).toHaveLength(2);
+    badges.forEach((badge) => expect(badge).toHaveClass("drawn"));
+    expect(badges.every((badge) => !badge.classList.contains("complete"))).toBe(true);
+    expect(screen.queryByText("ATIVO")).not.toBeInTheDocument();
   });
 });
 

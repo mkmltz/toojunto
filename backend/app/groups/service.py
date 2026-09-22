@@ -1,5 +1,5 @@
 import secrets
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -18,6 +18,7 @@ from .schemas import (
     FormacaoGrupoResposta,
     IntegranteGrupoResposta,
     PapelGrupo,
+    PosicaoSorteioResposta,
 )
 
 
@@ -163,7 +164,33 @@ def obter_grupo_do_usuario(
         ],
     )
     dados_grupo = _grupo_com_papel(grupo, usuario).model_dump()
-    return GrupoDetalheResposta(**dados_grupo, formacao=formacao)
+    ordem_recebimento = None
+    if grupo.status == "ATIVO":
+        ordem_recebimento = [
+            PosicaoSorteioResposta(
+                posicao=participante.ordem_sorteio,
+                nome=integrante.nome,
+                papel=(
+                    PapelGrupo.GESTOR
+                    if integrante.id == grupo.gestor_id
+                    else PapelGrupo.PARTICIPANTE
+                ),
+                data_prevista=(
+                    grupo.data_inicio + timedelta(
+                        days=(participante.ordem_sorteio - 1) * 30
+                    )
+                ).date(),
+            )
+            for participante, integrante in sorted(
+                integrantes,
+                key=lambda item: item[0].ordem_sorteio or 0,
+            )
+        ]
+    return GrupoDetalheResposta(
+        **dados_grupo,
+        formacao=formacao,
+        ordem_recebimento=ordem_recebimento,
+    )
 
 
 def _buscar_grupo_gerenciavel(
@@ -309,6 +336,60 @@ def preparar_sorteio(
 
     try:
         grupo.status = "SORTEIO"
+        db.commit()
+        db.refresh(grupo)
+    except Exception:
+        db.rollback()
+        raise
+    return grupo
+
+
+def realizar_sorteio(grupo_id: int, gestor: Usuario, db: Session) -> Grupo:
+    grupo = db.scalar(
+        select(Grupo).where(Grupo.id == grupo_id).with_for_update()
+    )
+    if grupo is None:
+        raise HTTPException(status_code=404, detail="Grupo não encontrado.")
+    if grupo.gestor_id != gestor.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Somente o gestor proprietário pode realizar o sorteio.",
+        )
+    if grupo.status != "SORTEIO":
+        raise HTTPException(
+            status_code=409,
+            detail="O Grupo não está pronto para o sorteio.",
+        )
+
+    participantes = db.scalars(
+        select(Participante).where(Participante.grupo_id == grupo.id)
+    ).all()
+    if (
+        grupo.quantidade_participantes < 2
+        or grupo.quantidade_ciclos != grupo.quantidade_participantes
+        or len(participantes) != grupo.quantidade_participantes
+        or len({p.usuario_id for p in participantes}) != len(participantes)
+        or any(
+            p.status != "ATIVO" or p.ordem_sorteio is not None
+            for p in participantes
+        )
+        or sum(p.usuario_id == grupo.gestor_id for p in participantes) != 1
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="A formação do Grupo não está apta para o sorteio.",
+        )
+
+    gestor_participante = next(
+        p for p in participantes if p.usuario_id == grupo.gestor_id
+    )
+    demais = [p for p in participantes if p.usuario_id != grupo.gestor_id]
+    secrets.SystemRandom().shuffle(demais)
+    try:
+        gestor_participante.ordem_sorteio = 1
+        for posicao, participante in enumerate(demais, start=2):
+            participante.ordem_sorteio = posicao
+        grupo.status = "ATIVO"
         db.commit()
         db.refresh(grupo)
     except Exception:

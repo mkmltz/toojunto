@@ -15,17 +15,20 @@ interface GroupDetailsPageProps {
   onCancelar: () => Promise<void>;
   onObterConvite: () => Promise<ConviteGrupo>;
   onPrepararSorteio: () => Promise<void>;
+  onRealizarSorteio: () => Promise<void>;
 }
 
-export function GroupDetailsPage({ nomeUsuario, grupo, aviso, carregando, onVoltar, onEditar, onCancelar, onObterConvite, onPrepararSorteio }: GroupDetailsPageProps) {
+export function GroupDetailsPage({ nomeUsuario, grupo, aviso, carregando, onVoltar, onEditar, onCancelar, onObterConvite, onPrepararSorteio, onRealizarSorteio }: GroupDetailsPageProps) {
   const [confirmando, setConfirmando] = useState(false);
   const [confirmandoSorteio, setConfirmandoSorteio] = useState(false);
+  const [confirmandoRealizacao, setConfirmandoRealizacao] = useState(false);
   const [erro, setErro] = useState("");
   const [convite, setConvite] = useState<ConviteGrupo | null>(null);
   const [carregandoConvite, setCarregandoConvite] = useState(false);
   const [feedbackConvite, setFeedbackConvite] = useState("");
   const podeGerenciar = grupo.papel === "GESTOR" && grupo.status === "RASCUNHO";
   const podePreparar = podeGerenciar && grupo.formacao.vagas_disponiveis === 0;
+  const podeRealizarSorteio = grupo.papel === "GESTOR" && grupo.status === "SORTEIO";
   const linkConvite = convite ? new URL(convite.invite_path, window.location.origin).toString() : "";
   const mensagemVagas = grupo.formacao.vagas_disponiveis === 0
     ? "Grupo completo."
@@ -52,6 +55,12 @@ export function GroupDetailsPage({ nomeUsuario, grupo, aviso, carregando, onVolt
     setErro("");
     try { await onPrepararSorteio(); setConfirmandoSorteio(false); }
     catch (error) { setErro(error instanceof Error ? error.message : "Não foi possível preparar o sorteio."); }
+  }
+
+  async function confirmarRealizacao() {
+    setErro("");
+    try { await onRealizarSorteio(); setConfirmandoRealizacao(false); }
+    catch (error) { setErro(error instanceof Error ? error.message : "Não foi possível realizar o sorteio."); }
   }
 
   async function copiarLink() {
@@ -84,10 +93,13 @@ export function GroupDetailsPage({ nomeUsuario, grupo, aviso, carregando, onVolt
 
   return <AppShell nome={nomeUsuario}>
     <button className="back" type="button" onClick={onVoltar}>← Voltar para Meus Grupos</button>
-    <section className="screen-title"><div><span className={`badge ${grupo.status === "CANCELADO" ? "danger" : ""}`}>{grupo.status}</span><h1 className="details-title">{grupo.nome}</h1><p className="subtitle">Seu papel: {grupo.papel === "GESTOR" ? "Gestor" : "Participante"}</p></div></section>
+    <section className="screen-title"><div><span className={`badge ${grupo.status === "ATIVO" ? "group-situation drawn" : grupo.status === "CANCELADO" ? "danger" : ""}`}>{grupo.status === "ATIVO" ? "Sorteio realizado" : grupo.status === "SORTEIO" ? "Pronto para sorteio" : grupo.status}</span><h1 className="details-title">{grupo.nome}</h1><p className="subtitle">Seu papel: {grupo.papel === "GESTOR" ? "Gestor" : "Participante"}</p></div></section>
     {aviso && <p className="alert success" role="status">{aviso}</p>}
     {erro && <p className="alert error" role="alert">{erro}</p>}
     {grupo.status === "SORTEIO" && <p className="alert success" role="status">Formação encerrada. O grupo está pronto para o sorteio.</p>}
+    {podeRealizarSorteio && !confirmandoRealizacao && <section className="card"><h2>Grupo pronto para sorteio</h2><button className="btn btn-primary" type="button" onClick={() => setConfirmandoRealizacao(true)}>Realizar sorteio</button></section>}
+    {podeRealizarSorteio && confirmandoRealizacao && <section className="card confirmation" role="dialog" aria-labelledby="titulo-realizar-sorteio"><h2 id="titulo-realizar-sorteio">Realizar sorteio?</h2><p>Você ficará com a 1ª posição. As demais pessoas serão sorteadas.</p><p>Depois de realizado, o sorteio não poderá ser alterado.</p><button className="btn btn-primary" type="button" disabled={carregando} onClick={confirmarRealizacao}>{carregando ? "Sorteando..." : "Realizar sorteio"}</button><button className="btn btn-secondary" type="button" disabled={carregando} onClick={() => setConfirmandoRealizacao(false)}>Cancelar</button></section>}
+    {grupo.ordem_recebimento && <section className="card draw-result" aria-labelledby="titulo-ordem"><h2 id="titulo-ordem">Ordem de recebimento</h2><ol>{grupo.ordem_recebimento.map((item) => <li key={item.posicao}><strong>{item.posicao}º</strong><div><b>{item.nome}</b>{item.papel === "GESTOR" && <span> — Gestor</span>}<p>Recebe em {formatarData(item.data_prevista)}</p></div></li>)}</ol></section>}
     <section className="card group-summary" aria-label="Detalhes do grupo"><dl><div><dt>Valor por ciclo</dt><dd>{formatarValor(grupo.valor_cota)}</dd></div><div><dt>Valor do prêmio</dt><dd>{formatarValor(grupo.valor_premio)}</dd></div><div><dt>Participantes</dt><dd>{grupo.quantidade_participantes}</dd></div><div><dt>Ciclos</dt><dd>{grupo.quantidade_ciclos}</dd></div><div><dt>Data de início</dt><dd>{formatarData(grupo.data_inicio)}</dd></div></dl></section>
     <section className="card group-members" aria-labelledby="titulo-participantes">
       <div className="group-members-heading"><h2 id="titulo-participantes">Participantes</h2><strong>{grupo.formacao.quantidade_atual} de {grupo.formacao.limite} pessoas</strong></div>
