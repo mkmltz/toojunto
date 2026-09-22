@@ -153,6 +153,35 @@ class ProgressoGrupoResposta(BaseModel):
     ciclos: list[CicloResposta]
 
 
+class SituacaoObrigacao(str, Enum):
+    PENDENTE = "PENDENTE"
+    AGUARDANDO_CONFIRMACAO = "AGUARDANDO_CONFIRMACAO"
+    ATRASADO = "ATRASADO"
+
+
+class DeclaracaoPagamento(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ObrigacaoPagamentoResposta(BaseModel):
+    grupo_id: int
+    numero_ciclo: int
+    pagador_id: int
+    pagador_usuario_id: int
+    pagador_nome: str
+    recebedor_id: int
+    recebedor_nome: str
+    valor: Decimal
+    data_prevista: date
+    prazo_pagamento: date
+    dias_ate_data_prevista: int
+    dias_ate_prazo: int
+    alerta_prazo: bool
+    situacao: SituacaoObrigacao
+    status_registro: str | None
+    declarado_em: datetime | None
+
+
 class ConviteResposta(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

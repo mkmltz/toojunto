@@ -585,6 +585,142 @@ describe("US-010", () => {
   });
 });
 
+describe("US-011", () => {
+  const grupoAtivo = grupo({ status: "ATIVO", papel: "PARTICIPANTE", gestor_id: 9 });
+  const progresso = {
+    ciclo_atual: 1, total_ciclos: 3, contemplado_ciclo_atual: "Maria",
+    data_prevista_ciclo_atual: "2026-10-10", ciclos: [],
+  };
+  const propria = {
+    grupo_id: 1, numero_ciclo: 1, pagador_id: 42, pagador_usuario_id: 1,
+    pagador_nome: "Ana Souza", recebedor_id: 8, recebedor_nome: "Maria", valor: "200.00",
+    data_prevista: "2026-10-10", prazo_pagamento: "2026-10-05",
+    dias_ate_data_prevista: 5, dias_ate_prazo: 0, alerta_prazo: true,
+    situacao: "PENDENTE", status_registro: null, declarado_em: null,
+  };
+  const outra = { ...propria, pagador_id: 43, pagador_usuario_id: 2, pagador_nome: "Bruno Lima", dias_ate_data_prevista: 2, dias_ate_prazo: -3 };
+
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  beforeEach(() => { localStorage.clear(); vi.stubGlobal("fetch", vi.fn()); });
+
+  async function abrirComObrigacoes(dados: unknown[]) {
+    await autenticar([grupoAtivo]);
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(grupoAtivo)).mockResolvedValueOnce(resposta(progresso)).mockResolvedValueOnce(resposta(dados));
+    fireEvent.click(screen.getByRole("button", { name: "Ver grupo" }));
+    return screen.findByRole("region", { name: "Pagamentos do ciclo atual" });
+  }
+
+  it("mostra obrigações coletivas e permite informar apenas a própria após confirmação", async () => {
+    const area = await abrirComObrigacoes([propria, outra]);
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/cycles/1/payments", expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
+    const itens = within(area).getAllByRole("listitem");
+    expect(itens).toHaveLength(2);
+    expect(itens[0]).toHaveTextContent("Ana Souza (você)");
+    expect(itens[0]).toHaveTextContent("R$ 200,00 para Maria");
+    expect(itens[0]).toHaveTextContent("Prazo para pagar: 05/10/2026");
+    expect(itens[0]).toHaveTextContent("Faltam 5 dias para o pagamento a Maria.");
+    expect(itens[0]).toHaveClass("payment-alert");
+    expect(itens[1]).toHaveTextContent("Bruno Lima");
+    expect(itens[1]).toHaveTextContent("Faltam 2 dias para o pagamento a Maria.");
+    expect(within(itens[1]).queryByRole("button", { name: "Informar pagamento" })).not.toBeInTheDocument();
+    fireEvent.click(within(itens[0]).getByRole("button", { name: "Informar pagamento" }));
+    const dialogo = screen.getByRole("dialog", { name: "Confirmar pagamento" });
+    expect(dialogo).toHaveTextContent("Você está informando que pagou R$ 200,00 para Maria.");
+    expect(dialogo).toHaveTextContent("O pagamento ficará aguardando a confirmação de Maria.");
+    expect(dialogo).toHaveAttribute("aria-modal", "true");
+    expect(within(dialogo).getByRole("button", { name: "Cancelar" })).toHaveFocus();
+    expect(fetch).not.toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/cycles/1/payments", expect.objectContaining({ method: "POST" }));
+    fireEvent.click(within(dialogo).getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByRole("dialog", { name: "Confirmar pagamento" })).not.toBeInTheDocument();
+    expect(within(itens[0]).getByRole("button", { name: "Informar pagamento" })).toHaveFocus();
+    fireEvent.click(within(itens[0]).getByRole("button", { name: "Informar pagamento" }));
+    const declarada = { ...propria, situacao: "AGUARDANDO_CONFIRMACAO", status_registro: "AGUARDANDO_CONFIRMACAO", declarado_em: "2026-09-22T10:00:00" };
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(declarada)).mockResolvedValueOnce(resposta([declarada, outra]));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Confirmar pagamento" })).getByRole("button", { name: "Sim, já paguei" }));
+    await waitFor(() => expect(within(itens[0]).getByText("Aguardando confirmação")).toBeInTheDocument());
+    expect(within(itens[0]).queryByRole("button", { name: "Informar pagamento" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Confirmar pagamento" })).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/cycles/1/payments", expect.objectContaining({ method: "POST", headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => url === "http://127.0.0.1:8000/groups/1/cycles/1/payments")).toHaveLength(3);
+    expect(screen.getByRole("region", { name: "Progresso do grupo" })).toBeInTheDocument();
+  });
+
+  it("mostra atraso e não cria obrigação para o contemplado", async () => {
+    const atrasada = { ...outra, situacao: "ATRASADO", alerta_prazo: false, dias_ate_data_prevista: -2 };
+    await autenticar([grupo({ status: "ATIVO" })]);
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(grupo({ status: "ATIVO" }))).mockResolvedValueOnce(resposta({ ...progresso, contemplado_ciclo_atual: "Ana Souza" })).mockResolvedValueOnce(resposta([atrasada]));
+    fireEvent.click(screen.getByRole("button", { name: "Ver grupo" }));
+    const area = await screen.findByRole("region", { name: "Pagamentos do ciclo atual" });
+    expect(within(area).getByText("Atrasado")).toBeInTheDocument();
+    expect(within(area).getByText("Pagamento a Maria em atraso há 2 dias.")).toBeInTheDocument();
+    expect(within(area).getByRole("listitem")).toHaveClass("payment-atrasado");
+    expect(within(area).queryByRole("button", { name: "Informar pagamento" })).not.toBeInTheDocument();
+    expect(within(area).queryByText("Ana Souza (você)")).not.toBeInTheDocument();
+  });
+
+  it("mostra pendência neutra e mensagem para a data prevista de hoje", async () => {
+    const pendente = { ...propria, alerta_prazo: false, dias_ate_data_prevista: 12 };
+    const hoje = { ...outra, situacao: "ATRASADO", alerta_prazo: false, dias_ate_data_prevista: 0 };
+    const area = await abrirComObrigacoes([pendente, hoje]);
+    expect(within(area).getByText("Pendente")).toBeInTheDocument();
+    expect(within(area).getByText("Pagamento a Maria previsto para hoje.")).toBeInTheDocument();
+    expect(within(area).getAllByRole("listitem")[0]).not.toHaveClass("payment-alert");
+  });
+
+  it("informa erro ao carregar obrigações e não mostra ação", async () => {
+    await autenticar([grupoAtivo]);
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(grupoAtivo)).mockResolvedValueOnce(resposta(progresso)).mockResolvedValueOnce(resposta({ detail: "Falha" }, 500));
+    fireEvent.click(screen.getByRole("button", { name: "Ver grupo" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível carregar os pagamentos do ciclo.");
+    expect(screen.queryByRole("button", { name: "Informar pagamento" })).not.toBeInTheDocument();
+  });
+
+  it("mantém a obrigação disponível quando o POST falha", async () => {
+    const area = await abrirComObrigacoes([propria]);
+    fireEvent.click(within(area).getByRole("button", { name: "Informar pagamento" }));
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Falha" }, 500));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Confirmar pagamento" })).getByRole("button", { name: "Sim, já paguei" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível informar o pagamento.");
+    expect(within(area).getByRole("button", { name: "Informar pagamento" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Confirmar pagamento" })).toBeInTheDocument();
+    const declarada = { ...propria, situacao: "AGUARDANDO_CONFIRMACAO", status_registro: "AGUARDANDO_CONFIRMACAO" };
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(declarada)).mockResolvedValueOnce(resposta([declarada]));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Confirmar pagamento" })).getByRole("button", { name: "Sim, já paguei" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Confirmar pagamento" })).not.toBeInTheDocument());
+    expect(within(area).getByText("Aguardando confirmação")).toBeInTheDocument();
+  });
+
+  it("bloqueia envios repetidos durante o POST e fecha após sucesso", async () => {
+    const area = await abrirComObrigacoes([propria]);
+    fireEvent.click(within(area).getByRole("button", { name: "Informar pagamento" }));
+    let resolver!: (valor: Response) => void;
+    const declarada = { ...propria, situacao: "AGUARDANDO_CONFIRMACAO", status_registro: "AGUARDANDO_CONFIRMACAO" };
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise<Response>((resolve) => { resolver = resolve; })).mockResolvedValueOnce(resposta([declarada]));
+    const dialogo = screen.getByRole("dialog", { name: "Confirmar pagamento" });
+    const confirmar = within(dialogo).getByRole("button", { name: "Sim, já paguei" });
+    fireEvent.click(confirmar);
+    expect(within(dialogo).getByRole("button", { name: "Enviando..." })).toBeDisabled();
+    fireEvent.click(confirmar);
+    expect(vi.mocked(fetch).mock.calls.filter(([url, opcoes]) => url === "http://127.0.0.1:8000/groups/1/cycles/1/payments" && (opcoes as RequestInit).method === "POST")).toHaveLength(1);
+    await act(async () => { resolver(resposta(declarada)); });
+    expect(screen.queryByRole("dialog", { name: "Confirmar pagamento" })).not.toBeInTheDocument();
+    expect(within(area).getByText("Aguardando confirmação")).toBeInTheDocument();
+  });
+
+  it("mantém o foco na modal e fecha com Escape", async () => {
+    const area = await abrirComObrigacoes([propria]);
+    fireEvent.click(within(area).getByRole("button", { name: "Informar pagamento" }));
+    const dialogo = screen.getByRole("dialog", { name: "Confirmar pagamento" });
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(within(dialogo).getByRole("button", { name: "Sim, já paguei" })).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(within(dialogo).getByRole("button", { name: "Cancelar" })).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Confirmar pagamento" })).not.toBeInTheDocument();
+    expect(within(area).getByRole("button", { name: "Informar pagamento" })).toHaveFocus();
+  });
+});
+
 describe("US-006", () => {
   const conviteRecebido = {
     group_name: "Grupo Convidado",

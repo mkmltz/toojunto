@@ -10,7 +10,7 @@ from sqlalchemy import delete, select
 from app.auth.security import criar_token_acesso, gerar_hash_senha
 from app.db import SessionLocal
 from app.main import app
-from app.models import Ciclo, Convite, Grupo, Participante, Usuario
+from app.models import Ciclo, Convite, Grupo, Pagamento, Participante, Usuario
 
 
 client = TestClient(app)
@@ -41,6 +41,10 @@ def contexto():
         ids_grupos = [g.id for g in grupos]
         if ids_grupos:
             db.execute(delete(Convite).where(Convite.grupo_id.in_(ids_grupos)))
+            ids_ciclos = db.scalars(select(Ciclo.id).where(Ciclo.grupo_id.in_(ids_grupos))).all()
+            if ids_ciclos:
+                db.execute(delete(Pagamento).where(Pagamento.ciclo_id.in_(ids_ciclos)))
+                db.execute(delete(Ciclo).where(Ciclo.id.in_(ids_ciclos)))
             db.execute(delete(Participante).where(Participante.grupo_id.in_(ids_grupos)))
             db.execute(delete(Grupo).where(Grupo.id.in_(ids_grupos)))
         db.execute(delete(Usuario).where(Usuario.id.in_(ids)))
@@ -188,3 +192,110 @@ def test_sorteios_concorrentes_tem_um_unico_vencedor(contexto):
     assert sorted(resultados) == [200, 409]
     ordem = client.get(f"/groups/{grupo['id']}", headers=headers(gestor)).json()["ordem_recebimento"]
     assert [item["posicao"] for item in ordem] == [1, 2, 3]
+
+
+def test_us011_obrigacoes_autorizacao_e_declaracao(contexto):
+    gestor, pagador, outro, externo = contexto
+    grupo, inicio = preparar_grupo(contexto)
+    caminho = f"/groups/{grupo['id']}/cycles/1/payments"
+    assert client.get(caminho, headers=headers(gestor)).status_code == 409
+    assert client.post(caminho, headers=headers(pagador)).status_code == 409
+    assert client.get(caminho, headers=headers(externo)).status_code == 404
+    assert client.post(caminho, headers=headers(externo)).status_code == 404
+    assert client.get(caminho).status_code == 401
+    assert client.post(f"/groups/{grupo['id']}/cycles/2/payments", headers=headers(pagador)).status_code == 409
+
+    assert client.post(f"/groups/{grupo['id']}/draw", headers=headers(gestor)).status_code == 200
+    obrigacoes = client.get(caminho, headers=headers(gestor)).json()
+    assert len(obrigacoes) == 2
+    assert {o["pagador_nome"] for o in obrigacoes} == {"Pessoa A", "Pessoa B"}
+    assert {o["pagador_usuario_id"] for o in obrigacoes} == {pagador.id, outro.id}
+    assert all(o["recebedor_nome"] == "Gestor" for o in obrigacoes)
+    assert all(o["valor"] == "100.00" for o in obrigacoes)
+    assert all(o["prazo_pagamento"] == (inicio - timedelta(days=5)).isoformat() for o in obrigacoes)
+    assert all(o["dias_ate_prazo"] == (inicio - date.today()).days - 5 for o in obrigacoes)
+    assert all(o["situacao"] == "PENDENTE" and o["status_registro"] is None for o in obrigacoes)
+    assert client.post(caminho, headers=headers(gestor)).status_code == 409
+    assert client.post(caminho, headers=headers(pagador), json={"valor": "1.00"}).status_code == 422
+    assert client.post(caminho, headers=headers(pagador), json={"pagador_id": 999}).status_code == 422
+    resposta_pagamento = client.post(caminho, headers=headers(pagador))
+    assert resposta_pagamento.status_code == 201
+    assert resposta_pagamento.json()["pagador_usuario_id"] == pagador.id
+    declaracao = client.get(caminho, headers=headers(outro)).json()
+    propria = next(o for o in declaracao if o["pagador_nome"] == "Pessoa A")
+    assert propria["pagador_usuario_id"] == pagador.id
+    assert propria["situacao"] == "AGUARDANDO_CONFIRMACAO"
+    assert propria["status_registro"] == "AGUARDANDO_CONFIRMACAO"
+    assert propria["declarado_em"] is not None
+    assert client.post(caminho, headers=headers(pagador)).status_code == 409
+    assert client.get(f"/groups/{grupo['id']}/cycles", headers=headers(gestor)).json()["ciclo_atual"] == 1
+    db = SessionLocal()
+    try:
+        participante_pagador = db.scalar(select(Participante).where(
+            Participante.grupo_id == grupo["id"], Participante.usuario_id == pagador.id
+        ))
+        assert propria["pagador_id"] == participante_pagador.id
+        assert resposta_pagamento.json()["pagador_id"] == participante_pagador.id
+        registro = db.scalar(select(Pagamento).join(Ciclo).where(Ciclo.grupo_id == grupo["id"]))
+        assert registro.pagador_id == propria["pagador_id"]
+        assert registro.recebedor_id == propria["recebedor_id"]
+        assert str(registro.valor) == "100.00"
+    finally:
+        db.close()
+
+
+def test_us011_prazo_alerta_e_atraso(contexto):
+    gestor, pagador, _, _ = contexto
+    grupo, _ = preparar_grupo(contexto)
+    assert client.post(f"/groups/{grupo['id']}/draw", headers=headers(gestor)).status_code == 200
+    caminho = f"/groups/{grupo['id']}/cycles/1/payments"
+    db = SessionLocal()
+    try:
+        db.get(Grupo, grupo["id"]).data_inicio = date.today() + timedelta(days=5)
+        db.commit()
+    finally:
+        db.close()
+    obrigacao = client.get(caminho, headers=headers(pagador)).json()[0]
+    assert obrigacao["dias_ate_data_prevista"] == 5
+    assert obrigacao["dias_ate_prazo"] == 0
+    assert obrigacao["alerta_prazo"] is True
+    db = SessionLocal()
+    try:
+        db.get(Grupo, grupo["id"]).data_inicio = date.today() + timedelta(days=2)
+        db.commit()
+    finally:
+        db.close()
+    obrigacao = client.get(caminho, headers=headers(pagador)).json()[0]
+    assert obrigacao["dias_ate_data_prevista"] == 2
+    assert obrigacao["alerta_prazo"] is True
+    db = SessionLocal()
+    try:
+        db.get(Grupo, grupo["id"]).data_inicio = date.today() - timedelta(days=2)
+        db.commit()
+    finally:
+        db.close()
+    obrigacao = client.get(caminho, headers=headers(pagador)).json()[0]
+    assert obrigacao["situacao"] == "ATRASADO"
+    assert obrigacao["dias_ate_data_prevista"] == -2
+    assert obrigacao["alerta_prazo"] is False
+    assert client.post(caminho, headers=headers(pagador)).status_code == 201
+    declarada = client.get(caminho, headers=headers(pagador)).json()[0]
+    assert declarada["situacao"] == "ATRASADO"
+    assert declarada["status_registro"] == "AGUARDANDO_CONFIRMACAO"
+
+
+def test_us011_declaracoes_concorrentes_nao_duplicam(contexto):
+    gestor, pagador, _, _ = contexto
+    grupo, _ = preparar_grupo(contexto)
+    assert client.post(f"/groups/{grupo['id']}/draw", headers=headers(gestor)).status_code == 200
+    caminho = f"/groups/{grupo['id']}/cycles/1/payments"
+    barreira = Barrier(2)
+
+    def declarar(_):
+        with TestClient(app) as cliente:
+            barreira.wait()
+            return cliente.post(caminho, headers=headers(pagador)).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        resultados = list(executor.map(declarar, range(2)))
+    assert sorted(resultados) == [201, 409]

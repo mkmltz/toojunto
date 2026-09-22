@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Body, Depends, status
 from sqlalchemy.orm import Session
 
 from ..auth.dependencies import get_current_user
@@ -12,6 +12,8 @@ from .schemas import (
     GrupoListaResposta,
     GrupoResposta,
     ProgressoGrupoResposta,
+    ObrigacaoPagamentoResposta,
+    DeclaracaoPagamento,
 )
 from .service import (
     atualizar_grupo,
@@ -21,6 +23,8 @@ from .service import (
     listar_grupos_do_usuario,
     obter_grupo_do_usuario,
     obter_progresso_grupo,
+    listar_obrigacoes_pagamento,
+    declarar_pagamento,
     preparar_sorteio,
     realizar_sorteio,
 )
@@ -63,6 +67,34 @@ def consultar_ciclos(
     db: Session = Depends(get_db),
 ):
     return obter_progresso_grupo(group_id, usuario, db)
+
+
+@router.get(
+    "/{group_id}/cycles/{cycle_number}/payments",
+    response_model=list[ObrigacaoPagamentoResposta],
+)
+def consultar_obrigacoes_do_ciclo(
+    group_id: int,
+    cycle_number: int,
+    usuario: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return listar_obrigacoes_pagamento(group_id, cycle_number, usuario, db)
+
+
+@router.post(
+    "/{group_id}/cycles/{cycle_number}/payments",
+    response_model=ObrigacaoPagamentoResposta,
+    status_code=status.HTTP_201_CREATED,
+)
+def registrar_pagamento_do_ciclo(
+    group_id: int,
+    cycle_number: int,
+    dados: DeclaracaoPagamento = Body(default_factory=DeclaracaoPagamento),
+    usuario: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return declarar_pagamento(group_id, cycle_number, usuario, db)
 
 
 @router.post(

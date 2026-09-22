@@ -75,6 +75,27 @@ export interface ProgressoGrupo {
   }[];
 }
 
+export type SituacaoObrigacao = "PENDENTE" | "AGUARDANDO_CONFIRMACAO" | "ATRASADO" | "CONFIRMADO";
+
+export interface ObrigacaoPagamento {
+  grupo_id: number;
+  numero_ciclo: number;
+  pagador_id: number;
+  pagador_usuario_id: number;
+  pagador_nome: string;
+  recebedor_id: number;
+  recebedor_nome: string;
+  valor: string;
+  data_prevista: string;
+  prazo_pagamento: string;
+  dias_ate_data_prevista: number;
+  dias_ate_prazo: number;
+  alerta_prazo: boolean;
+  situacao: SituacaoObrigacao;
+  status_registro: string | null;
+  declarado_em: string | null;
+}
+
 export interface ConviteGrupo {
   id: number;
   group_id: number;
