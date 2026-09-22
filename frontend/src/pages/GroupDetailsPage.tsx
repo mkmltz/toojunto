@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AppShell } from "../components/AppShell";
-import type { ConviteGrupo, GrupoDetalhe } from "../types/groups";
+import { buscarProgressoGrupo } from "../services/groups";
+import type { ConviteGrupo, GrupoDetalhe, ProgressoGrupo, SituacaoCiclo } from "../types/groups";
 
 const formatarValor = (valor: string) => Number(valor).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const formatarData = (data: string) => new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(new Date(`${data}T00:00:00Z`));
+const rotuloSituacao: Record<SituacaoCiclo, string> = { ATUAL: "ATUAL", PROXIMO: "PRÓXIMO", CONCLUIDO: "CONCLUÍDO" };
 
 interface GroupDetailsPageProps {
   nomeUsuario: string;
@@ -26,6 +28,23 @@ export function GroupDetailsPage({ nomeUsuario, grupo, aviso, carregando, onVolt
   const [convite, setConvite] = useState<ConviteGrupo | null>(null);
   const [carregandoConvite, setCarregandoConvite] = useState(false);
   const [feedbackConvite, setFeedbackConvite] = useState("");
+  const [progresso, setProgresso] = useState<ProgressoGrupo | null>(null);
+  const [carregandoProgresso, setCarregandoProgresso] = useState(false);
+  const [erroProgresso, setErroProgresso] = useState("");
+  useEffect(() => {
+    setProgresso(null);
+    setErroProgresso("");
+    if (grupo.status !== "ATIVO") return;
+    const token = localStorage.getItem("toojunto_access_token");
+    if (!token) return;
+    let ativo = true;
+    setCarregandoProgresso(true);
+    buscarProgressoGrupo(grupo.id, token)
+      .then((dados) => { if (ativo) setProgresso(dados); })
+      .catch(() => { if (ativo) setErroProgresso("Não foi possível carregar o progresso do grupo."); })
+      .finally(() => { if (ativo) setCarregandoProgresso(false); });
+    return () => { ativo = false; };
+  }, [grupo.id, grupo.status]);
   const podeGerenciar = grupo.papel === "GESTOR" && grupo.status === "RASCUNHO";
   const podePreparar = podeGerenciar && grupo.formacao.vagas_disponiveis === 0;
   const podeRealizarSorteio = grupo.papel === "GESTOR" && grupo.status === "SORTEIO";
@@ -99,6 +118,9 @@ export function GroupDetailsPage({ nomeUsuario, grupo, aviso, carregando, onVolt
     {grupo.status === "SORTEIO" && <p className="alert success" role="status">Formação encerrada. O grupo está pronto para o sorteio.</p>}
     {podeRealizarSorteio && !confirmandoRealizacao && <section className="card"><h2>Grupo pronto para sorteio</h2><button className="btn btn-primary" type="button" onClick={() => setConfirmandoRealizacao(true)}>Realizar sorteio</button></section>}
     {podeRealizarSorteio && confirmandoRealizacao && <section className="card confirmation" role="dialog" aria-labelledby="titulo-realizar-sorteio"><h2 id="titulo-realizar-sorteio">Realizar sorteio?</h2><p>Você ficará com a 1ª posição. As demais pessoas serão sorteadas.</p><p>Depois de realizado, o sorteio não poderá ser alterado.</p><button className="btn btn-primary" type="button" disabled={carregando} onClick={confirmarRealizacao}>{carregando ? "Sorteando..." : "Realizar sorteio"}</button><button className="btn btn-secondary" type="button" disabled={carregando} onClick={() => setConfirmandoRealizacao(false)}>Cancelar</button></section>}
+    {grupo.status === "ATIVO" && carregandoProgresso && <p role="status">Carregando progresso do grupo...</p>}
+    {grupo.status === "ATIVO" && erroProgresso && <p className="alert error" role="alert">{erroProgresso}</p>}
+    {grupo.status === "ATIVO" && progresso && <section className="card cycles-progress" aria-labelledby="titulo-progresso"><h2 id="titulo-progresso">Progresso do grupo</h2><div className="cycle-current"><p>Ciclo atual</p><strong>Ciclo {progresso.ciclo_atual} de {progresso.total_ciclos}</strong><p>Contemplado: <b>{progresso.contemplado_ciclo_atual}</b></p><p>Data prevista: <b>{formatarData(progresso.data_prevista_ciclo_atual)}</b></p></div><h3>Calendário dos ciclos</h3><ol className="cycle-list">{progresso.ciclos.map((ciclo) => <li key={ciclo.numero_ciclo} className={`cycle-item cycle-${ciclo.situacao.toLowerCase()}`}><div><strong>Ciclo {ciclo.numero_ciclo}</strong><span className="cycle-status">{rotuloSituacao[ciclo.situacao]}</span></div><p>{ciclo.nome} · {ciclo.papel === "GESTOR" ? "Gestor" : "Participante"}</p><p>Data prevista: {formatarData(ciclo.data_prevista)}</p></li>)}</ol></section>}
     {grupo.ordem_recebimento && <section className="card draw-result" aria-labelledby="titulo-ordem"><h2 id="titulo-ordem">Ordem de recebimento</h2><ol>{grupo.ordem_recebimento.map((item) => <li key={item.posicao}><strong>{item.posicao}º</strong><div><b>{item.nome}</b>{item.papel === "GESTOR" && <span> — Gestor</span>}<p>Recebe em {formatarData(item.data_prevista)}</p></div></li>)}</ol></section>}
     <section className="card group-summary" aria-label="Detalhes do grupo"><dl><div><dt>Valor por ciclo</dt><dd>{formatarValor(grupo.valor_cota)}</dd></div><div><dt>Valor do prêmio</dt><dd>{formatarValor(grupo.valor_premio)}</dd></div><div><dt>Participantes</dt><dd>{grupo.quantidade_participantes}</dd></div><div><dt>Ciclos</dt><dd>{grupo.quantidade_ciclos}</dd></div><div><dt>Data de início</dt><dd>{formatarData(grupo.data_inicio)}</dd></div></dl></section>
     <section className="card group-members" aria-labelledby="titulo-participantes">

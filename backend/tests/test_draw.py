@@ -115,6 +115,49 @@ def test_sorteio_persiste_ordem_e_calendario_de_30_dias(contexto):
         db.close()
 
 
+def test_progresso_dos_ciclos_para_integrantes_autorizados(contexto):
+    gestor, participante, _, externo = contexto
+    grupo, inicio = preparar_grupo(contexto)
+    caminho = f"/groups/{grupo['id']}/cycles"
+    assert client.get(caminho, headers=headers(gestor)).status_code == 409
+    assert client.get(caminho, headers=headers(externo)).status_code == 404
+    assert client.get(caminho).status_code == 401
+
+    assert client.post(
+        f"/groups/{grupo['id']}/draw", headers=headers(gestor)
+    ).status_code == 200
+    progresso = client.get(caminho, headers=headers(gestor))
+    assert progresso.status_code == 200
+    dados = progresso.json()
+    assert dados["ciclo_atual"] == 1
+    assert dados["total_ciclos"] == 3
+    assert dados["contemplado_ciclo_atual"] == "Gestor"
+    assert dados["data_prevista_ciclo_atual"] == inicio.isoformat()
+    assert [c["numero_ciclo"] for c in dados["ciclos"]] == [1, 2, 3]
+    assert [c["situacao"] for c in dados["ciclos"]] == [
+        "ATUAL", "PROXIMO", "PROXIMO"
+    ]
+    assert [c["data_prevista"] for c in dados["ciclos"]] == [
+        (inicio + timedelta(days=30 * i)).isoformat() for i in range(3)
+    ]
+    assert dados["ciclos"][0]["papel"] == "GESTOR"
+    assert all(c["papel"] == "PARTICIPANTE" for c in dados["ciclos"][1:])
+    assert client.get(caminho, headers=headers(participante)).json() == dados
+    assert client.get(caminho, headers=headers(externo)).status_code == 404
+
+    db = SessionLocal()
+    try:
+        db.get(Grupo, grupo["id"]).data_inicio = inicio - timedelta(days=100)
+        db.commit()
+    finally:
+        db.close()
+    apos_datas_previstas = client.get(caminho, headers=headers(gestor)).json()
+    assert apos_datas_previstas["ciclo_atual"] == 1
+    assert [c["situacao"] for c in apos_datas_previstas["ciclos"]] == [
+        "ATUAL", "PROXIMO", "PROXIMO"
+    ]
+
+
 @pytest.mark.parametrize("estado", ["RASCUNHO", "CANCELADO", "ATIVO"])
 def test_estado_incorreto_impede_sorteio(contexto, estado):
     gestor = contexto[0]

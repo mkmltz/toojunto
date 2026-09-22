@@ -19,6 +19,9 @@ from .schemas import (
     IntegranteGrupoResposta,
     PapelGrupo,
     PosicaoSorteioResposta,
+    CicloResposta,
+    ProgressoGrupoResposta,
+    SituacaoCiclo,
 )
 
 
@@ -190,6 +193,39 @@ def obter_grupo_do_usuario(
         **dados_grupo,
         formacao=formacao,
         ordem_recebimento=ordem_recebimento,
+    )
+
+
+def obter_progresso_grupo(
+    grupo_id: int, usuario: Usuario, db: Session
+) -> ProgressoGrupoResposta:
+    detalhe = obter_grupo_do_usuario(grupo_id, usuario, db)
+    if detalhe.status != "ATIVO" or not detalhe.ordem_recebimento:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Os ciclos ainda não estão disponíveis.",
+        )
+
+    ciclos = [
+        CicloResposta(
+            numero_ciclo=posicao.posicao,
+            nome=posicao.nome,
+            papel=posicao.papel,
+            data_prevista=posicao.data_prevista,
+            situacao=(
+                SituacaoCiclo.ATUAL
+                if posicao.posicao == 1
+                else SituacaoCiclo.PROXIMO
+            ),
+        )
+        for posicao in detalhe.ordem_recebimento
+    ]
+    return ProgressoGrupoResposta(
+        ciclo_atual=1,
+        total_ciclos=detalhe.quantidade_ciclos,
+        contemplado_ciclo_atual=ciclos[0].nome,
+        data_prevista_ciclo_atual=ciclos[0].data_prevista,
+        ciclos=ciclos,
     )
 
 

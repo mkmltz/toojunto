@@ -59,6 +59,22 @@ export interface GrupoDetalhe extends GrupoComPapel {
   }[];
 }
 
+export type SituacaoCiclo = "ATUAL" | "PROXIMO" | "CONCLUIDO";
+
+export interface ProgressoGrupo {
+  ciclo_atual: number;
+  total_ciclos: number;
+  contemplado_ciclo_atual: string;
+  data_prevista_ciclo_atual: string;
+  ciclos: {
+    numero_ciclo: number;
+    nome: string;
+    papel: PapelGrupo;
+    data_prevista: string;
+    situacao: SituacaoCiclo;
+  }[];
+}
+
 export interface ConviteGrupo {
   id: number;
   group_id: number;

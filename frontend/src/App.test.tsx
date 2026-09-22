@@ -447,6 +447,7 @@ describe("US-008", () => {
     fireEvent.click(within(screen.getByRole("dialog", { name: "Preparar sorteio?" })).getByRole("button", { name: "Preparar sorteio" }));
     expect(await screen.findByText("Grupo pronto para o sorteio.")).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/prepare-draw", expect.objectContaining({ method: "POST", headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1", expect.anything());
     expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups/1", expect.anything());
     expect(screen.getByText("Formação encerrada. O grupo está pronto para o sorteio.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Preparar sorteio" })).not.toBeInTheDocument();
@@ -500,7 +501,7 @@ describe("US-009", () => {
     fireEvent.click(within(screen.getByRole("dialog", { name: "Realizar sorteio?" })).getByRole("button", { name: "Realizar sorteio" }));
     expect(await screen.findByRole("heading", { name: "Ordem de recebimento" })).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/draw", expect.objectContaining({ method: "POST", headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
-    expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups/1", expect.anything());
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/cycles", expect.anything());
     const ordem = screen.getByRole("region", { name: "Ordem de recebimento" });
     expect(within(ordem).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
       "1ºAna Souza — GestorRecebe em 10/10/2026",
@@ -539,6 +540,48 @@ describe("US-009", () => {
     badges.forEach((badge) => expect(badge).toHaveClass("drawn"));
     expect(badges.every((badge) => !badge.classList.contains("complete"))).toBe(true);
     expect(screen.queryByText("ATIVO")).not.toBeInTheDocument();
+  });
+});
+
+describe("US-010", () => {
+  const progresso = {
+    ciclo_atual: 2,
+    total_ciclos: 3,
+    contemplado_ciclo_atual: "Bruno Lima",
+    data_prevista_ciclo_atual: "2026-11-09",
+    ciclos: [
+      { numero_ciclo: 1, nome: "Ana Souza", papel: "GESTOR", data_prevista: "2026-10-10", situacao: "CONCLUIDO" },
+      { numero_ciclo: 2, nome: "Bruno Lima", papel: "PARTICIPANTE", data_prevista: "2026-11-09", situacao: "ATUAL" },
+      { numero_ciclo: 3, nome: "Carla Dias", papel: "PARTICIPANTE", data_prevista: "2026-12-09", situacao: "PROXIMO" },
+    ],
+  };
+
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  beforeEach(() => { localStorage.clear(); vi.stubGlobal("fetch", vi.fn()); });
+
+  it("exibe o progresso recebido da API para participante, com texto e destaque por situação", async () => {
+    await autenticar([grupo({ status: "ATIVO", papel: "PARTICIPANTE" })]);
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(grupo({ status: "ATIVO", papel: "PARTICIPANTE" }))).mockResolvedValueOnce(resposta(progresso));
+    fireEvent.click(screen.getByRole("button", { name: "Ver grupo" }));
+    const area = await screen.findByRole("region", { name: "Progresso do grupo" });
+    expect(within(area).getByText("Ciclo 2 de 3")).toBeInTheDocument();
+    expect(within(area).getByText("Contemplado:").parentElement).toHaveTextContent("Bruno Lima");
+    expect(within(area).getByText("Data prevista:").parentElement).toHaveTextContent("09/11/2026");
+    const itens = within(area).getAllByRole("listitem");
+    expect(itens.map((item) => item.textContent)).toEqual([
+      "Ciclo 1CONCLUÍDOAna Souza · GestorData prevista: 10/10/2026",
+      "Ciclo 2ATUALBruno Lima · ParticipanteData prevista: 09/11/2026",
+      "Ciclo 3PRÓXIMOCarla Dias · ParticipanteData prevista: 09/12/2026",
+    ]);
+    expect(itens[1]).toHaveClass("cycle-atual");
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/cycles", expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
+    expect(screen.queryByRole("button", { name: /avançar ciclo|pagamento/i })).not.toBeInTheDocument();
+  });
+
+  it("não consulta nem mostra progresso antes do sorteio", async () => {
+    await abrirDetalhes(grupo({ status: "SORTEIO" }));
+    expect(screen.queryByRole("region", { name: "Progresso do grupo" })).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/cycles", expect.anything());
   });
 });
 

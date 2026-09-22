@@ -131,6 +131,28 @@ class GrupoDetalheResposta(GrupoComPapelResposta):
     ordem_recebimento: list[PosicaoSorteioResposta] | None = None
 
 
+class SituacaoCiclo(str, Enum):
+    ATUAL = "ATUAL"
+    PROXIMO = "PROXIMO"
+    CONCLUIDO = "CONCLUIDO"
+
+
+class CicloResposta(BaseModel):
+    numero_ciclo: int
+    nome: str
+    papel: PapelGrupo
+    data_prevista: date
+    situacao: SituacaoCiclo
+
+
+class ProgressoGrupoResposta(BaseModel):
+    ciclo_atual: int
+    total_ciclos: int
+    contemplado_ciclo_atual: str
+    data_prevista_ciclo_atual: date
+    ciclos: list[CicloResposta]
+
+
 class ConviteResposta(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

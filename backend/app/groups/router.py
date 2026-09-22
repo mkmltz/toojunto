@@ -11,6 +11,7 @@ from .schemas import (
     GrupoDetalheResposta,
     GrupoListaResposta,
     GrupoResposta,
+    ProgressoGrupoResposta,
 )
 from .service import (
     atualizar_grupo,
@@ -19,6 +20,7 @@ from .service import (
     gerar_ou_obter_convite,
     listar_grupos_do_usuario,
     obter_grupo_do_usuario,
+    obter_progresso_grupo,
     preparar_sorteio,
     realizar_sorteio,
 )
@@ -52,6 +54,15 @@ def consultar_grupo(
     db: Session = Depends(get_db),
 ):
     return obter_grupo_do_usuario(group_id, usuario, db)
+
+
+@router.get("/{group_id}/cycles", response_model=ProgressoGrupoResposta)
+def consultar_ciclos(
+    group_id: int,
+    usuario: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return obter_progresso_grupo(group_id, usuario, db)
 
 
 @router.post(
