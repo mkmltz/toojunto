@@ -38,8 +38,13 @@ def consultar_convite(
     if vagas_disponiveis <= 0:
         raise _convite_indisponivel()
 
+    gestor_nome = db.scalar(
+        select(Usuario.nome).where(Usuario.id == grupo.gestor_id)
+    )
+
     return ConvitePublicoResposta(
         group_name=grupo.nome,
+        manager_name=gestor_nome,
         quota_value=grupo.valor_cota,
         participant_limit=grupo.quantidade_participantes,
         available_slots=vagas_disponiveis,

@@ -1,11 +1,19 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class UsuarioCadastro(BaseModel):
     nome: str = Field(min_length=2, max_length=120)
     email: EmailStr
-    telefone: str | None = Field(default=None, max_length=30)
+    telefone: str = Field(min_length=1, max_length=30)
     senha: str = Field(min_length=8, max_length=128)
+
+    @field_validator("telefone")
+    @classmethod
+    def validar_telefone(cls, telefone: str) -> str:
+        telefone = telefone.strip()
+        if not telefone:
+            raise ValueError("O telefone é obrigatório.")
+        return telefone
 
 
 class UsuarioResposta(BaseModel):
@@ -21,4 +29,4 @@ class LoginRequest(BaseModel):
 
 class TokenResposta(BaseModel):
     access_token: str
-    token_type: str = "bearer" 
+    token_type: str = "bearer"

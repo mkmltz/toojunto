@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 class ConvitePublicoResposta(BaseModel):
     group_name: str
+    manager_name: str
     quota_value: Decimal
     participant_limit: int
     available_slots: int

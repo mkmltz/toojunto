@@ -1,5 +1,6 @@
 export interface ConvitePublico {
   group_name: string;
+  manager_name: string;
   quota_value: string;
   participant_limit: number;
   available_slots: number;

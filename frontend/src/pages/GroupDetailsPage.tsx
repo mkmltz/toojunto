@@ -196,6 +196,7 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
   const podeRealizarSorteio = grupo.papel === "GESTOR" && grupo.status === "SORTEIO";
   useEffect(() => { if (!podePreparar) setConfirmandoSorteio(false); }, [podePreparar]);
   const linkConvite = convite ? new URL(convite.invite_path, window.location.origin).toString() : "";
+  const mensagemConvite = `Você foi convidado por ${nomeUsuario} para participar de uma caixinha digital no grupo ${grupo.nome} — TooJunto.\n\nAcesse o convite:\n${linkConvite}`;
   const mensagemVagas = grupo.formacao.vagas_disponiveis === 0
     ? "Grupo completo."
     : grupo.formacao.vagas_disponiveis === 1
@@ -253,7 +254,7 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
     try {
       await navigator.share({
         title: `Convite para o Grupo ${grupo.nome}`,
-        text: `Você foi convidado para participar do Grupo ${grupo.nome} no TooJunto. ${linkConvite}`,
+        text: mensagemConvite,
         url: linkConvite,
       });
       setFeedbackConvite("Convite compartilhado.");

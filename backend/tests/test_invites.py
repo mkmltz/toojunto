@@ -125,11 +125,15 @@ def test_consulta_publica_retorna_somente_dados_essenciais(contexto_convite):
     assert response.status_code == 200
     assert response.json() == {
         "group_name": "Grupo convidado",
+        "manager_name": "Gestor",
         "quota_value": "150.00",
         "participant_limit": 3,
         "available_slots": 2,
         "start_date": date.today().isoformat(),
     }
+    assert "email" not in response.json()
+    assert "telefone" not in response.json()
+    assert "gestor_id" not in response.json()
 
 
 def test_consultar_convite_nao_cria_participacao(contexto_convite):

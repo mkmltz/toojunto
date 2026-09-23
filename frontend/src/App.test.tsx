@@ -335,7 +335,7 @@ describe("US-005", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Link copiado com sucesso.");
   });
 
-  it("usa navigator.share com nome do Grupo e link", async () => {
+  it("usa o compartilhamento nativo com Gestor, Grupo e URL completa", async () => {
     const compartilhar = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "share", { configurable: true, value: compartilhar });
     await abrirDetalhes();
@@ -345,10 +345,14 @@ describe("US-005", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Compartilhar convite" }));
 
-    await waitFor(() => expect(compartilhar).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringContaining("Grupo dos Amigos"),
-      url: `${window.location.origin}/invites/token-seguro`,
-    })));
+    const urlCompleta = `${window.location.origin}/invites/token-seguro`;
+    await waitFor(() => expect(compartilhar).toHaveBeenCalledOnce());
+    const dadosCompartilhados = compartilhar.mock.calls[0][0];
+    expect(dadosCompartilhados).toEqual(expect.objectContaining({ url: urlCompleta }));
+    expect(dadosCompartilhados.text).toContain("Ana Souza");
+    expect(dadosCompartilhados.text).toContain("Grupo dos Amigos");
+    expect(dadosCompartilhados.text).toContain(urlCompleta);
+    expect(dadosCompartilhados.text).not.toContain("127.0.0.1");
     expect(screen.getByRole("status")).toHaveTextContent("Convite compartilhado.");
   });
 
@@ -905,9 +909,82 @@ describe("US-012", () => {
   });
 });
 
+describe("US-014A - cadastro", () => {
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  beforeEach(() => { localStorage.clear(); vi.stubGlobal("fetch", vi.fn()); });
+
+  function abrirCadastro() {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Criar minha conta" }));
+  }
+
+  function preencherCadastro(senha = "senha-segura", confirmacao = senha) {
+    fireEvent.change(screen.getByLabelText("Nome completo *"), { target: { value: "Nova Pessoa" } });
+    fireEvent.change(screen.getByLabelText("E-mail *"), { target: { value: "nova@example.com" } });
+    fireEvent.change(screen.getByLabelText("Telefone *"), { target: { value: "(71) 99999-9999" } });
+    fireEvent.change(screen.getByLabelText("Senha *"), { target: { value: senha } });
+    fireEvent.change(screen.getByLabelText("Confirmar senha *"), { target: { value: confirmacao } });
+  }
+
+  it("exige telefone e apresenta a regra atual de senha", () => {
+    abrirCadastro();
+
+    expect(screen.getByLabelText("Telefone *")).toBeRequired();
+    expect(screen.getByLabelText("Senha *")).toHaveAttribute("minlength", "8");
+    expect(screen.getByLabelText("Senha *")).toHaveAttribute("maxlength", "128");
+    expect(screen.getByText("A senha deve ter entre 8 e 128 caracteres.")).toBeInTheDocument();
+  });
+
+  it("não envia telefone somente com espaços", () => {
+    abrirCadastro();
+    preencherCadastro();
+    fireEvent.change(screen.getByLabelText("Telefone *"), { target: { value: "   " } });
+
+    fireEvent.submit(screen.getByRole("button", { name: "Criar conta" }).closest("form")!);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Informe seu telefone.");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["curta", "a".repeat(129)])("rejeita senha fora do intervalo permitido", (senha) => {
+    abrirCadastro();
+    preencherCadastro(senha, senha);
+
+    fireEvent.submit(screen.getByRole("button", { name: "Criar conta" }).closest("form")!);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("A senha deve ter entre 8 e 128 caracteres.");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("informa quando a confirmação de senha é diferente", () => {
+    abrirCadastro();
+    preencherCadastro("senha-segura", "senha-diferente");
+
+    fireEvent.submit(screen.getByRole("button", { name: "Criar conta" }).closest("form")!);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("As senhas não coincidem.");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("envia o cadastro com confirmação correta sem incluir confirmar_senha", async () => {
+    abrirCadastro();
+    preencherCadastro();
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ id: 9, nome: "Nova Pessoa", email: "nova@example.com", telefone: "(71) 99999-9999" }, 201));
+
+    fireEvent.click(screen.getByRole("button", { name: "Criar conta" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Conta criada com sucesso");
+    const corpo = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body));
+    expect(corpo).toEqual({ nome: "Nova Pessoa", email: "nova@example.com", telefone: "(71) 99999-9999", senha: "senha-segura" });
+    expect(corpo).not.toHaveProperty("confirmar_senha");
+    expect(corpo).not.toHaveProperty("confirmarSenha");
+  });
+});
+
 describe("US-006", () => {
   const conviteRecebido = {
     group_name: "Grupo Convidado",
+    manager_name: "Carlos Lima",
     quota_value: "150.00",
     participant_limit: 5,
     available_slots: 2,
@@ -930,7 +1007,8 @@ describe("US-006", () => {
     vi.mocked(fetch).mockResolvedValueOnce(resposta(conviteRecebido));
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "Você foi convidado para participar de um Grupo" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Você foi convidado por Carlos Lima" })).toBeInTheDocument();
+    expect(screen.getByText("Caso você ainda não tenha conta no TooJunto, crie sua conta para participar.")).toBeInTheDocument();
     expect(screen.getByText("Grupo Convidado")).toBeInTheDocument();
     expect(screen.getByText("R$ 150,00")).toBeInTheDocument();
     expect(screen.getByText("5")).toBeInTheDocument();
@@ -989,8 +1067,10 @@ describe("US-006", () => {
 
     fireEvent.change(screen.getByLabelText("Nome completo *"), { target: { value: "Nova Pessoa" } });
     fireEvent.change(screen.getByLabelText("E-mail *"), { target: { value: "nova@example.com" } });
+    fireEvent.change(screen.getByLabelText("Telefone *"), { target: { value: "(71) 99999-9999" } });
     fireEvent.change(screen.getByLabelText("Senha *"), { target: { value: "senha-segura" } });
-    vi.mocked(fetch).mockResolvedValueOnce(resposta({ id: 9, nome: "Nova Pessoa", email: "nova@example.com", telefone: null }, 201));
+    fireEvent.change(screen.getByLabelText("Confirmar senha *"), { target: { value: "senha-segura" } });
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ id: 9, nome: "Nova Pessoa", email: "nova@example.com", telefone: "(71) 99999-9999" }, 201));
     fireEvent.click(screen.getByRole("button", { name: "Criar conta" }));
 
     expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();

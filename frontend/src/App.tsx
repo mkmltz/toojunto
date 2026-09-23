@@ -189,7 +189,7 @@ export default function App() {
   async function cadastrar(dados: { nome: string; email: string; telefone: string; senha: string }) {
     setEnviando(true);
     try {
-      await cadastrarUsuario({ ...dados, telefone: dados.telefone || undefined });
+      await cadastrarUsuario(dados);
       setAviso("Conta criada com sucesso. Agora entre para continuar.");
       setTela("login");
     } catch (error) { throw new Error(mensagemDeErro(error)); }

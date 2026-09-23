@@ -80,7 +80,40 @@ def test_cadastro_valido_retorna_201_sem_senha_hash(emails_temporarios):
 
     assert response.status_code == 201
     assert response.json()["email"] == email
+    assert response.json()["telefone"] == "71999999999"
     assert "senha_hash" not in response.json()
+
+
+@pytest.mark.parametrize(
+    "telefone",
+    [None, ""],
+)
+def test_cadastro_sem_telefone_retorna_422(emails_temporarios, telefone):
+    email = f"sem-telefone-{uuid4()}@example.com"
+    emails_temporarios.append(email)
+    dados = dados_cadastro(email)
+    if telefone is None:
+        dados.pop("telefone")
+    else:
+        dados["telefone"] = telefone
+
+    response = client.post("/auth/register", json=dados)
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"][-1] == "telefone"
+
+
+def test_cadastro_com_telefone_em_branco_retorna_422(emails_temporarios):
+    email = f"telefone-branco-{uuid4()}@example.com"
+    emails_temporarios.append(email)
+
+    response = client.post(
+        "/auth/register",
+        json=dados_cadastro(email, telefone="   "),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"][-1] == "telefone"
 
 
 def test_cadastro_com_email_duplicado_retorna_409(usuario_temporario):
@@ -112,6 +145,25 @@ def test_cadastro_com_dados_invalidos_retorna_422(
     response = client.post("/auth/register", json=dados)
 
     assert response.status_code == 422
+
+
+def test_cadastro_com_senha_curta_informa_regra_minima(emails_temporarios):
+    email = f"senha-curta-{uuid4()}@example.com"
+    emails_temporarios.append(email)
+
+    response = client.post(
+        "/auth/register",
+        json=dados_cadastro(email, senha="curta"),
+    )
+
+    assert response.status_code == 422
+    erro_senha = next(
+        erro
+        for erro in response.json()["detail"]
+        if erro["loc"][-1] == "senha"
+    )
+    assert erro_senha["type"] == "string_too_short"
+    assert erro_senha["ctx"]["min_length"] == 8
 
 
 def test_login_com_credenciais_validas_retorna_bearer_token(usuario_temporario):
