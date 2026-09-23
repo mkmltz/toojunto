@@ -13,6 +13,16 @@ function grupo(sobrescritas: Partial<GrupoDetalhe & GrupoLista> = {}): GrupoDeta
   return { id: 1, nome: "Grupo dos Amigos", gestor_id: 1, gestor_nome: "Ana Souza", valor_cota: "200.00", valor_premio: "2000.00", quantidade_participantes: 10, quantidade_ciclos: 10, data_inicio: "2026-10-01", status: "RASCUNHO", created_at: "2026-09-16T12:00:00", papel: "GESTOR", vagas_disponiveis: 8, formacao: { quantidade_atual: 2, limite: 10, vagas_disponiveis: 8, participantes: [{ nome: "Ana Souza", papel: "GESTOR" }, { nome: "Bruno Lima", papel: "PARTICIPANTE" }] }, ...sobrescritas };
 }
 
+function progressoSorteado() {
+  return {
+    ciclo_atual: 1, total_ciclos: 2, contemplado_ciclo_atual: "Ana Souza", data_prevista_ciclo_atual: "2026-10-10",
+    ciclos: [
+      { numero_ciclo: 1, nome: "Ana Souza", papel: "GESTOR", data_prevista: "2026-10-10", situacao: "ATUAL" },
+      { numero_ciclo: 2, nome: "Bruno Lima", papel: "PARTICIPANTE", data_prevista: "2026-11-09", situacao: "PROXIMO" },
+    ],
+  };
+}
+
 function grupoEditavel(sobrescritas: Partial<GrupoDetalhe & GrupoLista> = {}): GrupoDetalhe & GrupoLista {
   return grupo({
     vagas_disponiveis: 9,
@@ -510,10 +520,10 @@ describe("US-008", () => {
   it("prepara e realiza o sorteio com uma confirmação e mostra o resultado", async () => {
     await abrirDetalhes(completo);
     const sorteado = grupo({ ...completo, status: "ATIVO", ordem_recebimento: [{ posicao: 1, nome: "Ana Souza", papel: "GESTOR", data_prevista: "2026-10-10" }] });
-    vi.mocked(fetch).mockResolvedValueOnce(resposta(grupo({ ...completo, status: "SORTEIO" }))).mockResolvedValueOnce(resposta(sorteado)).mockResolvedValueOnce(resposta(sorteado));
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(grupo({ ...completo, status: "SORTEIO" }))).mockResolvedValueOnce(resposta(sorteado)).mockResolvedValueOnce(resposta(sorteado)).mockResolvedValueOnce(resposta(progressoSorteado())).mockResolvedValueOnce(resposta([]));
     fireEvent.click(screen.getByRole("button", { name: "Preparar sorteio" }));
     fireEvent.click(within(screen.getByRole("dialog", { name: "Preparar sorteio" })).getByRole("button", { name: "Realizar sorteio" }));
-    expect(await screen.findByRole("heading", { name: "Ordem de recebimento" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Próximos recebimentos" })).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/prepare-draw", expect.objectContaining({ method: "POST", headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/draw", expect.objectContaining({ method: "POST" }));
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1", expect.anything());
@@ -575,38 +585,38 @@ describe("US-009", () => {
 
   it("realiza diretamente um sorteio já preparado e recarrega o resultado", async () => {
     await abrirDetalhes(preparado);
-    vi.mocked(fetch).mockResolvedValueOnce(resposta(sorteado)).mockResolvedValueOnce(resposta(sorteado));
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(sorteado)).mockResolvedValueOnce(resposta(sorteado)).mockResolvedValueOnce(resposta(progressoSorteado())).mockResolvedValueOnce(resposta([]));
     fireEvent.click(screen.getByRole("button", { name: "Realizar sorteio" }));
-    expect(await screen.findByRole("heading", { name: "Ordem de recebimento" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Próximos recebimentos" })).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/draw", expect.objectContaining({ method: "POST", headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/cycles", expect.anything()));
-    const ordem = screen.getByRole("region", { name: "Ordem de recebimento" });
+    const ordem = screen.getByRole("region", { name: "Próximos recebimentos" });
     expect(within(ordem).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
-      "1ºAna Souza — GestorRecebe em 10/10/2026",
-      "2ºBruno LimaRecebe em 09/11/2026",
+      "1º cicloEm andamentoAna Souza · GestorData prevista: 10/10/2026",
+      "2º cicloPróximoBruno Lima · ParticipanteData prevista: 09/11/2026",
     ]);
-    expect(screen.getByText("Em andamento")).toHaveClass("drawn");
+    expect(screen.getAllByText("Em andamento").find((item) => item.classList.contains("drawn"))).toBeDefined();
     expect(screen.queryByRole("button", { name: "Realizar sorteio" })).not.toBeInTheDocument();
   });
 
   it("mostra a mesma ordem após recarregar e oculta a ação do participante", async () => {
     localStorage.setItem("toojunto_access_token", "token-valido");
     localStorage.setItem("toojunto_selected_group_id", "1");
-    vi.mocked(fetch).mockResolvedValueOnce(resposta(usuario)).mockResolvedValueOnce(resposta(grupo({ ...sorteado, papel: "PARTICIPANTE" })));
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(usuario)).mockResolvedValueOnce(resposta(grupo({ ...sorteado, papel: "PARTICIPANTE" }))).mockResolvedValueOnce(resposta(progressoSorteado())).mockResolvedValueOnce(resposta([]));
     render(<App />);
-    const ordem = await screen.findByRole("region", { name: "Ordem de recebimento" });
+    const ordem = await screen.findByRole("region", { name: "Próximos recebimentos" });
     expect(within(ordem).getAllByRole("listitem")).toHaveLength(2);
-    expect(within(ordem).getByText("Recebe em 09/11/2026")).toBeInTheDocument();
+    expect(within(ordem).getByText("Data prevista: 09/11/2026")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Realizar sorteio" })).not.toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/draw", expect.anything());
   });
 
   it("atualiza o resultado após conflito sem mostrar novo botão", async () => {
     await abrirDetalhes(preparado);
-    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "O sorteio já ocorreu." }, 409)).mockResolvedValueOnce(resposta(sorteado));
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "O sorteio já ocorreu." }, 409)).mockResolvedValueOnce(resposta(sorteado)).mockResolvedValueOnce(resposta(progressoSorteado())).mockResolvedValueOnce(resposta([]));
     fireEvent.click(screen.getByRole("button", { name: "Realizar sorteio" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("O sorteio não pôde ser realizado.");
-    expect(screen.getByRole("heading", { name: "Ordem de recebimento" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Próximos recebimentos" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Realizar sorteio" })).not.toBeInTheDocument();
   });
 
@@ -638,26 +648,37 @@ describe("US-010", () => {
 
   it("exibe o progresso recebido da API para participante, com texto e destaque por situação", async () => {
     await autenticar([grupo({ status: "ATIVO", papel: "PARTICIPANTE" })]);
-    vi.mocked(fetch).mockResolvedValueOnce(resposta(grupo({ status: "ATIVO", papel: "PARTICIPANTE" }))).mockResolvedValueOnce(resposta(progresso));
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(grupo({ status: "ATIVO", papel: "PARTICIPANTE" }))).mockResolvedValueOnce(resposta(progresso)).mockResolvedValueOnce(resposta([]));
     fireEvent.click(screen.getByRole("button", { name: "Ver grupo" }));
-    const area = await screen.findByRole("region", { name: "Progresso do grupo" });
+    const area = await screen.findByRole("region", { name: "Ciclo atual" });
     expect(within(area).getByText("Ciclo 2 de 3")).toBeInTheDocument();
     expect(within(area).getByText("Contemplado:").parentElement).toHaveTextContent("Bruno Lima");
     expect(within(area).getByText("Data prevista:").parentElement).toHaveTextContent("09/11/2026");
-    const itens = within(area).getAllByRole("listitem");
+    const agenda = screen.getByRole("region", { name: "Próximos recebimentos" });
+    const itens = within(agenda).getAllByRole("listitem");
     expect(itens.map((item) => item.textContent)).toEqual([
-      "Ciclo 1CONCLUÍDOAna Souza · GestorData prevista: 10/10/2026",
-      "Ciclo 2ATUALBruno Lima · ParticipanteData prevista: 09/11/2026",
-      "Ciclo 3PRÓXIMOCarla Dias · ParticipanteData prevista: 09/12/2026",
+      "1º cicloConcluídoAna Souza · GestorData prevista: 10/10/2026",
+      "2º cicloEm andamentoBruno Lima · ParticipanteData prevista: 09/11/2026",
+      "3º cicloPróximoCarla Dias · ParticipanteData prevista: 09/12/2026",
     ]);
     expect(itens[1]).toHaveClass("cycle-atual");
+    expect(screen.queryByRole("heading", { name: "Progresso do grupo" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Calendário dos ciclos" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Ordem de recebimento" })).not.toBeInTheDocument();
+    const regras = screen.getByRole("button", { name: "Regras do grupo" });
+    const participantes = screen.getByRole("button", { name: "Participantes (2)" });
+    expect(regras).toHaveAttribute("aria-expanded", "false");
+    expect(participantes).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(regras);
+    expect(regras).toHaveAttribute("aria-expanded", "true");
+    expect(document.getElementById("regras-grupo")).not.toHaveAttribute("hidden");
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/cycles", expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
     expect(screen.queryByRole("button", { name: /avançar ciclo|pagamento/i })).not.toBeInTheDocument();
   });
 
   it("não consulta nem mostra progresso antes do sorteio", async () => {
     await abrirDetalhes(grupo({ status: "SORTEIO" }));
-    expect(screen.queryByRole("region", { name: "Progresso do grupo" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Ciclo atual" })).not.toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/cycles", expect.anything());
   });
 });
@@ -689,6 +710,7 @@ describe("US-011", () => {
 
   it("mostra obrigações coletivas e permite informar apenas a própria após confirmação", async () => {
     const area = await abrirComObrigacoes([propria, outra]);
+    expect(screen.getByRole("region", { name: "Ciclo atual" })).toHaveTextContent("0 de 2 pagamentos confirmados");
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/cycles/1/payments", expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
     const itens = within(area).getAllByRole("listitem");
     expect(itens).toHaveLength(2);
@@ -719,7 +741,7 @@ describe("US-011", () => {
     expect(screen.queryByRole("dialog", { name: "Confirmar pagamento" })).not.toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/cycles/1/payments", expect.objectContaining({ method: "POST", headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
     expect(vi.mocked(fetch).mock.calls.filter(([url]) => url === "http://127.0.0.1:8000/groups/1/cycles/1/payments")).toHaveLength(3);
-    expect(screen.getByRole("region", { name: "Progresso do grupo" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Ciclo atual" })).toBeInTheDocument();
   });
 
   it("mostra atraso e não cria obrigação para o contemplado", async () => {
@@ -879,7 +901,7 @@ describe("US-012", () => {
     vi.mocked(fetch).mockResolvedValueOnce(resposta(confirmado)).mockResolvedValueOnce(resposta(avancado)).mockResolvedValueOnce(resposta([novaObrigacao]));
     fireEvent.click(within(screen.getByRole("dialog", { name: "Confirmar recebimento?" })).getByRole("button", { name: "Sim, recebi" }));
     expect(await screen.findByText("Ciclo 2 de 2")).toBeInTheDocument();
-    const calendario = screen.getByRole("region", { name: "Progresso do grupo" });
+    const calendario = screen.getByRole("region", { name: "Próximos recebimentos" });
     expect(within(calendario).getAllByRole("listitem")[0]).toHaveClass("cycle-concluido");
     expect(within(calendario).getAllByRole("listitem")[1]).toHaveClass("cycle-atual");
     expect(await screen.findByText("Ana Souza (você)")).toBeInTheDocument();
@@ -894,8 +916,8 @@ describe("US-012", () => {
     vi.mocked(fetch).mockResolvedValueOnce(resposta(confirmado)).mockResolvedValueOnce(resposta(encerrado)).mockResolvedValueOnce(resposta([confirmado]));
     fireEvent.click(within(screen.getByRole("dialog", { name: "Confirmar recebimento?" })).getByRole("button", { name: "Sim, recebi" }));
     expect(await screen.findByText(/Todos os ciclos e pagamentos deste Grupo foram concluídos/)).toBeInTheDocument();
-    expect(screen.queryByText("Ciclo 2 de 2")).not.toBeInTheDocument();
-    expect(within(screen.getByRole("region", { name: "Progresso do grupo" })).getAllByRole("listitem").every((item) => item.classList.contains("cycle-concluido"))).toBe(true);
+    expect(screen.getByRole("region", { name: "Último ciclo" })).toHaveTextContent("Ciclo 2 de 2");
+    expect(within(screen.getByRole("region", { name: "Próximos recebimentos" })).getAllByRole("listitem").every((item) => item.classList.contains("cycle-concluido"))).toBe(true);
     expect(screen.queryByRole("button", { name: "Confirmar" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Informar pagamento" })).not.toBeInTheDocument();
   });
