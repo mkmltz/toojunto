@@ -32,8 +32,20 @@ function mensagemDeErro(error: unknown) {
 
 function mensagemDeErroGrupo(error: unknown) {
   if (error instanceof ApiError) {
+    const detalhe = typeof error.detail === "string"
+      ? error.detail
+      : Array.isArray(error.detail) && typeof error.detail[0]?.msg === "string"
+        ? error.detail[0].msg
+        : error.message;
     if (error.status === 403) return "Você não tem permissão para gerenciar este grupo.";
     if (error.status === 404) return "Grupo não encontrado ou sem acesso.";
+    if (error.status === 409 && (
+      detalhe.includes("já possui um grupo ativo chamado")
+      || detalhe.includes("não podem ser alteradas após")
+    )) return detalhe;
+    if (error.status === 422 && detalhe.includes(
+      "A data de início do grupo não pode ser menor que a data de hoje."
+    )) return "A data de início do grupo não pode ser menor que a data de hoje.";
     if (error.status === 409) return "Este grupo não pode mais ser alterado.";
     if (error.status === 422) return "Confira os dados do grupo e tente novamente.";
   }
@@ -252,7 +264,7 @@ export default function App() {
     setEnviando(true);
     try {
       const grupo = await cancelarGrupo(grupoSelecionado.id, token);
-      setGrupoSelecionado({ ...grupo, papel: grupoSelecionado.papel, formacao: grupoSelecionado.formacao });
+      setGrupoSelecionado({ ...grupoSelecionado, ...grupo, papel: grupoSelecionado.papel, formacao: grupoSelecionado.formacao });
       setAvisoGrupo("Grupo cancelado. Ele continua disponível para consulta.");
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) { encerrarSessao("Sua sessão terminou. Entre novamente para continuar."); return; }

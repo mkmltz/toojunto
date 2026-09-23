@@ -269,6 +269,38 @@ def test_dados_invalidos_retornam_422(usuario, sobrescritas):
     assert response.status_code == 422
 
 
+def test_data_anterior_retorna_mensagem_especifica(usuario):
+    response = client.post(
+        "/groups",
+        json=dados_grupo(
+            data_inicio=(date.today() - timedelta(days=1)).isoformat(),
+        ),
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 422
+    assert any(
+        erro["loc"][-1] == "data_inicio"
+        and "A data de início do grupo não pode ser menor que a data de hoje."
+        in erro["msg"]
+        for erro in response.json()["detail"]
+    )
+
+
+@pytest.mark.parametrize("dias", [0, 10])
+def test_data_de_hoje_ou_futura_e_permitida(usuario, dias):
+    response = client.post(
+        "/groups",
+        json=dados_grupo(
+            nome=f"Grupo data {dias}",
+            data_inicio=(date.today() + timedelta(days=dias)).isoformat(),
+        ),
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 201
+
+
 @pytest.mark.parametrize(
     "campo",
     [
@@ -353,6 +385,95 @@ def test_edicao_parcial_preserva_campos_nao_informados(usuario):
     assert response.json()["data_inicio"] == grupo["data_inicio"]
 
 
+@pytest.mark.parametrize("estado", ["RASCUNHO", "FORMANDO", "SORTEIO", "ATIVO"])
+def test_mesmo_gestor_nao_pode_repetir_nome_de_grupo_ativo(usuario, estado):
+    grupo = criar_grupo_via_api(usuario, nome="Amigos")
+    db = SessionLocal()
+    try:
+        db.get(Grupo, grupo["id"]).status = estado
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/groups",
+        json=dados_grupo(nome="Amigos"),
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": (
+            'Você já possui um grupo ativo chamado "Amigos". '
+            "Escolha outro nome para o novo grupo."
+        )
+    }
+
+
+@pytest.mark.parametrize("nome", ["amigos", "  AMIGOS  ", "Grupo   dos   Amigos"])
+def test_comparacao_de_nome_ignora_caixa_e_espacos(usuario, nome):
+    existente = "Grupo dos Amigos" if "Grupo" in nome else "Amigos"
+    criar_grupo_via_api(usuario, nome=existente)
+
+    response = client.post(
+        "/groups",
+        json=dados_grupo(nome=nome),
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 409
+
+
+@pytest.mark.parametrize("estado", ["ENCERRADO", "CANCELADO"])
+def test_nome_pode_ser_reutilizado_apos_estado_terminal(usuario, estado):
+    grupo = criar_grupo_via_api(usuario, nome="Amigos")
+    db = SessionLocal()
+    try:
+        db.get(Grupo, grupo["id"]).status = estado
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/groups",
+        json=dados_grupo(nome="amigos"),
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 201
+
+
+def test_gestores_diferentes_podem_usar_o_mesmo_nome(usuario, outro_usuario):
+    criar_grupo_via_api(usuario, nome="Amigos")
+
+    response = client.post(
+        "/groups",
+        json=dados_grupo(nome="Amigos"),
+        headers=cabecalho_autorizacao(outro_usuario),
+    )
+
+    assert response.status_code == 201
+
+
+def test_edicao_rejeita_nome_conflitante_e_ignora_o_proprio_grupo(usuario):
+    criar_grupo_via_api(usuario, nome="Amigos")
+    outro_grupo = criar_grupo_via_api(usuario, nome="Família")
+
+    conflito = client.patch(
+        f"/groups/{outro_grupo['id']}",
+        json={"nome": " amigos "},
+        headers=cabecalho_autorizacao(usuario),
+    )
+    proprio_nome = client.patch(
+        f"/groups/{outro_grupo['id']}",
+        json={"nome": "  FAMÍLIA  "},
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert conflito.status_code == 409
+    assert proprio_nome.status_code == 200
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -420,12 +541,10 @@ def test_quantidade_nao_pode_ser_menor_que_participantes_associados(usuario):
         )
         assert response.status_code == 409
 
-        response = client.patch(
-            f"/groups/{grupo['id']}",
-            json={"quantidade_participantes": 3},
-            headers=cabecalho_autorizacao(usuario),
+        assert response.json()["detail"] == (
+            "As condições do Grupo não podem ser alteradas após "
+            "o primeiro participante aceitar o convite."
         )
-        assert response.status_code == 200
     finally:
         db.execute(
             delete(Participante).where(
@@ -520,6 +639,32 @@ def test_cancelamento_e_logico_e_retorna_grupo_atualizado(usuario):
         db.close()
 
 
+def test_primeiro_aceite_bloqueia_edicao_mas_nao_cancelamento(
+    usuario,
+    outro_usuario,
+):
+    grupo = criar_grupo_via_api(usuario)
+    associar_usuario_ao_grupo(outro_usuario, grupo["id"])
+
+    editar = client.patch(
+        f"/groups/{grupo['id']}",
+        json={"nome": "Novo acordo"},
+        headers=cabecalho_autorizacao(usuario),
+    )
+    cancelar = client.post(
+        f"/groups/{grupo['id']}/cancel",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert editar.status_code == 409
+    assert editar.json()["detail"] == (
+        "As condições do Grupo não podem ser alteradas após "
+        "o primeiro participante aceitar o convite."
+    )
+    assert cancelar.status_code == 200
+    assert cancelar.json()["status"] == "CANCELADO"
+
+
 def test_grupo_cancelado_nao_pode_ser_editado_nem_cancelado_novamente(usuario):
     grupo = criar_grupo_via_api(usuario)
     headers = cabecalho_autorizacao(usuario)
@@ -553,7 +698,7 @@ def test_atualizacao_faz_rollback_quando_persistencia_falha(usuario, monkeypatch
         status="RASCUNHO",
     )
     db = MagicMock()
-    db.scalar.return_value = 1
+    db.scalar.side_effect = [None, usuario.id, 1]
     db.commit.side_effect = RuntimeError("falha de persistência")
     monkeypatch.setattr(
         "app.groups.service._buscar_grupo_gerenciavel",
@@ -609,6 +754,7 @@ def test_listagem_retorna_grupo_do_gestor_com_papel_gestor(usuario):
         {
             **grupo,
             "papel": "GESTOR",
+            "gestor_nome": usuario.nome,
             "vagas_disponiveis": 9,
         }
     ]
@@ -631,9 +777,12 @@ def test_listagem_retorna_grupo_associado_com_papel_participante(
         {
             **grupo,
             "papel": "PARTICIPANTE",
+            "gestor_nome": usuario.nome,
             "vagas_disponiveis": 8,
         }
     ]
+    assert "gestor_email" not in response.json()[0]
+    assert "gestor_telefone" not in response.json()[0]
 
 
 @pytest.mark.parametrize("estado", ["RASCUNHO", "SORTEIO", "CANCELADO"])
@@ -768,6 +917,7 @@ def test_detalhe_retorna_papel_gestor_para_proprietario(usuario):
     assert response.json() == {
         **grupo,
         "papel": "GESTOR",
+        "gestor_nome": usuario.nome,
         "formacao": {
             "quantidade_atual": 1,
             "limite": 10,
@@ -795,6 +945,7 @@ def test_detalhe_retorna_papel_participante_para_associado_ativo(
     assert response.json() == {
         **grupo,
         "papel": "PARTICIPANTE",
+        "gestor_nome": usuario.nome,
         "formacao": {
             "quantidade_atual": 2,
             "limite": 10,

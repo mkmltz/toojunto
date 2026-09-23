@@ -31,6 +31,7 @@ export interface Grupo {
 
 export interface GrupoComPapel extends Grupo {
   papel: PapelGrupo;
+  gestor_nome: string;
 }
 
 export interface GrupoLista extends GrupoComPapel {

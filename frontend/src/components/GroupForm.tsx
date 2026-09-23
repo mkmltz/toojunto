@@ -10,6 +10,12 @@ interface GroupFormProps {
 }
 
 const DADOS_INICIAIS: GrupoFormularioDados = { nome: "", valor_cota: "", quantidade_participantes: 2, data_inicio: "" };
+const hoje = new Date();
+const DATA_MINIMA = [
+  hoje.getFullYear(),
+  String(hoje.getMonth() + 1).padStart(2, "0"),
+  String(hoje.getDate()).padStart(2, "0"),
+].join("-");
 
 export function GroupForm({ carregando, dadosIniciais = DADOS_INICIAIS, textoBotao, textoCarregando, onEnviar }: GroupFormProps) {
   const [dados, setDados] = useState<GrupoFormularioDados>(dadosIniciais);
@@ -33,7 +39,7 @@ export function GroupForm({ carregando, dadosIniciais = DADOS_INICIAIS, textoBot
     <label htmlFor="grupo-ciclos">Quantidade de ciclos</label><input id="grupo-ciclos" className="calculated-input" type="number" value={dados.quantidade_participantes} readOnly aria-describedby="grupo-ciclos-ajuda" />
     <p id="grupo-ciclos-ajuda" className="field-help">Calculada automaticamente pelo número de participantes.</p>
     <div className="calculated-value"><span>Valor do prêmio</span><output aria-live="polite">{valorPremioFormatado}</output></div>
-    <label htmlFor="grupo-data">Data de início *</label><input id="grupo-data" type="date" value={dados.data_inicio} onChange={(evento) => setDados({ ...dados, data_inicio: evento.target.value })} required />
+    <label htmlFor="grupo-data">Data de início *</label><input id="grupo-data" type="date" value={dados.data_inicio} onChange={(evento) => setDados({ ...dados, data_inicio: evento.target.value })} required min={DATA_MINIMA} />
     <button className="btn btn-primary" type="submit" disabled={carregando}>{carregando ? textoCarregando : textoBotao}</button>
   </form>;
 }

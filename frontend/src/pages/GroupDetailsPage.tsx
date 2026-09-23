@@ -191,6 +191,10 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
     }
   }
   const podeGerenciar = grupo.papel === "GESTOR" && grupo.status === "RASCUNHO";
+  const regrasImutaveis = grupo.formacao.participantes.some(
+    (participante) => participante.papel === "PARTICIPANTE",
+  );
+  const podeEditar = podeGerenciar && !regrasImutaveis;
   const temCiclos = grupo.status === "ATIVO" || grupo.status === "ENCERRADO";
   const podePreparar = podeGerenciar && grupo.formacao.vagas_disponiveis === 0;
   const podeRealizarSorteio = grupo.papel === "GESTOR" && grupo.status === "SORTEIO";
@@ -268,7 +272,7 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
 
   return <AppShell nome={nomeUsuario}>
     <button className="back" type="button" onClick={onVoltar}>← Voltar para Meus Grupos</button>
-    <section className="screen-title"><div><span className={`badge ${grupoConcluido ? "group-situation complete" : grupo.status === "ATIVO" ? "group-situation drawn" : grupo.status === "CANCELADO" ? "danger" : ""}`}>{grupoConcluido ? "Grupo concluído" : grupo.status === "ATIVO" ? "Em andamento" : grupo.status === "SORTEIO" ? "Pronto para sorteio" : grupo.status}</span><h1 className="details-title">{grupo.nome}</h1><p className="subtitle">Seu papel: {grupo.papel === "GESTOR" ? "Gestor" : "Participante"}</p></div></section>
+    <section className="screen-title"><div><span className={`badge ${grupoConcluido ? "group-situation complete" : grupo.status === "ATIVO" ? "group-situation drawn" : grupo.status === "CANCELADO" ? "danger" : ""}`}>{grupoConcluido ? "Grupo concluído" : grupo.status === "ATIVO" ? "Em andamento" : grupo.status === "SORTEIO" ? "Pronto para sorteio" : grupo.status}</span><h1 className="details-title">{grupo.nome}</h1><p className="subtitle">Gestor: {grupo.gestor_nome}<br /><span>Seu papel: {grupo.papel === "GESTOR" ? "Gestor" : "Participante"}</span></p></div></section>
     {aviso && <p className="alert success" role="status">{aviso}</p>}
     {erro && (!confirmandoSorteio || !podePreparar) && <p className="alert error" role="alert">{erro}</p>}
     {grupo.status === "SORTEIO" && <p className="alert success" role="status">Formação encerrada. O grupo está pronto para o sorteio.</p>}
@@ -297,7 +301,7 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
     {podeGerenciar && !podePreparar && convite && <section className="card invite-card"><h2>Convide pessoas para o Grupo</h2><p>Compartilhe este convite com quem você deseja trazer para o grupo.</p><div className="invite-link" aria-label="Link do convite">{linkConvite}</div>{feedbackConvite && <p className="alert success" role="status">{feedbackConvite}</p>}<button className="btn btn-primary" type="button" onClick={compartilharConvite}>Compartilhar convite</button><button className="btn btn-secondary" type="button" onClick={copiarLink}>Copiar link</button></section>}
     {podePreparar && <section className="card"><h2>Seu grupo está completo</h2><button className="btn btn-primary" ref={botaoPrepararSorteio} type="button" onClick={() => setConfirmandoSorteio(true)}>Preparar sorteio</button></section>}
     {podePreparar && confirmandoSorteio && <div className="payment-modal-backdrop"><section className="payment-modal card" role="dialog" aria-modal="true" aria-labelledby="titulo-preparacao"><h2 id="titulo-preparacao">Preparar sorteio</h2><p>O grupo está completo. Ao realizar o sorteio, será definida a ordem em que cada participante receberá.</p>{erro && <p className="alert error" role="alert">{erro}</p>}<button className="btn btn-secondary" ref={botaoCancelarSorteio} type="button" disabled={executandoSorteio} onClick={() => setConfirmandoSorteio(false)}>Cancelar</button><button className="btn btn-primary" ref={botaoRealizarSorteio} type="button" disabled={executandoSorteio} onClick={confirmarPreparacao}>{executandoSorteio ? "Sorteando..." : "Realizar sorteio"}</button></section></div>}
-    {podeGerenciar && !confirmando && <section className="card"><h2>Gerenciar grupo</h2><button className="btn btn-secondary" type="button" onClick={onEditar}>Editar grupo</button><button className="btn btn-danger" type="button" onClick={() => setConfirmando(true)}>Cancelar grupo</button></section>}
+    {podeGerenciar && !confirmando && <section className="card"><h2>Gerenciar grupo</h2>{podeEditar ? <button className="btn btn-secondary" type="button" onClick={onEditar}>Editar grupo</button> : <p className="field-help edit-locked">As regras deste grupo não podem mais ser alteradas porque um participante já aceitou o convite.</p>}<button className="btn btn-danger" type="button" onClick={() => setConfirmando(true)}>Cancelar grupo</button></section>}
     {podeGerenciar && confirmando && <section className="card confirmation" role="dialog" aria-labelledby="titulo-cancelamento"><h2 id="titulo-cancelamento">Cancelar este grupo?</h2><p>O grupo será cancelado, mas não será excluído. Depois disso, não será possível editar ou cancelar novamente.</p><button className="btn btn-danger-solid" type="button" disabled={carregando} onClick={confirmarCancelamento}>{carregando ? "Cancelando..." : "Sim, cancelar grupo"}</button><button className="btn btn-secondary" type="button" disabled={carregando} onClick={() => setConfirmando(false)}>Voltar</button></section>}
   </AppShell>;
 }

@@ -27,11 +27,52 @@ from .schemas import (
 )
 
 
+def _normalizar_nome_grupo(nome: str) -> str:
+    return " ".join(nome.split()).casefold()
+
+
+def _garantir_nome_disponivel(
+    nome: str,
+    gestor_id: int,
+    db: Session,
+    grupo_id_ignorado: int | None = None,
+) -> None:
+    db.scalar(
+        select(Usuario.id)
+        .where(Usuario.id == gestor_id)
+        .with_for_update()
+    )
+    consulta = select(Grupo).where(
+        Grupo.gestor_id == gestor_id,
+        Grupo.status.notin_(("ENCERRADO", "CANCELADO")),
+    )
+    if grupo_id_ignorado is not None:
+        consulta = consulta.where(Grupo.id != grupo_id_ignorado)
+    nome_normalizado = _normalizar_nome_grupo(nome)
+    conflito = next(
+        (
+            grupo
+            for grupo in db.scalars(consulta).all()
+            if _normalizar_nome_grupo(grupo.nome) == nome_normalizado
+        ),
+        None,
+    )
+    if conflito is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f'Você já possui um grupo ativo chamado "{conflito.nome}". '
+                "Escolha outro nome para o novo grupo."
+            ),
+        )
+
+
 def criar_grupo(
     dados: GrupoCriacao,
     gestor: Usuario,
     db: Session,
 ) -> Grupo:
+    _garantir_nome_disponivel(dados.nome, gestor.id, db)
     grupo = Grupo(
         nome=dados.nome,
         gestor_id=gestor.id,
@@ -66,6 +107,7 @@ def criar_grupo(
 def _grupo_com_papel(
     grupo: Grupo,
     usuario: Usuario,
+    gestor_nome: str,
 ) -> GrupoComPapelResposta:
     papel = (
         PapelGrupo.GESTOR
@@ -73,7 +115,11 @@ def _grupo_com_papel(
         else PapelGrupo.PARTICIPANTE
     )
     dados_grupo = GrupoResposta.model_validate(grupo).model_dump()
-    return GrupoComPapelResposta(**dados_grupo, papel=papel)
+    return GrupoComPapelResposta(
+        **dados_grupo,
+        papel=papel,
+        gestor_nome=gestor_nome,
+    )
 
 
 def listar_grupos_do_usuario(
@@ -98,19 +144,24 @@ def listar_grupos_do_usuario(
         .subquery()
     )
     grupos = db.execute(
-        select(Grupo, func.coalesce(ocupacao.c.quantidade_atual, 0))
+        select(
+            Grupo,
+            Usuario.nome,
+            func.coalesce(ocupacao.c.quantidade_atual, 0),
+        )
+        .join(Usuario, Usuario.id == Grupo.gestor_id)
         .outerjoin(ocupacao, ocupacao.c.grupo_id == Grupo.id)
         .where(participacao_ativa)
         .order_by(Grupo.created_at.desc(), Grupo.id.desc())
     ).all()
     return [
         GrupoListaResposta(
-            **_grupo_com_papel(grupo, usuario).model_dump(),
+            **_grupo_com_papel(grupo, usuario, gestor_nome).model_dump(),
             vagas_disponiveis=max(
                 grupo.quantidade_participantes - quantidade_atual, 0
             ),
         )
-        for grupo, quantidade_atual in grupos
+        for grupo, gestor_nome, quantidade_atual in grupos
     ]
 
 
@@ -128,17 +179,20 @@ def obter_grupo_do_usuario(
         )
         .exists()
     )
-    grupo = db.scalar(
-        select(Grupo).where(
+    resultado = db.execute(
+        select(Grupo, Usuario.nome)
+        .join(Usuario, Usuario.id == Grupo.gestor_id)
+        .where(
             Grupo.id == grupo_id,
             participacao_ativa,
         )
-    )
-    if grupo is None:
+    ).one_or_none()
+    if resultado is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Grupo não encontrado.",
         )
+    grupo, gestor_nome = resultado
     integrantes = db.execute(
         select(Participante, Usuario)
         .join(Usuario, Usuario.id == Participante.usuario_id)
@@ -168,7 +222,11 @@ def obter_grupo_do_usuario(
             for _, integrante in integrantes
         ],
     )
-    dados_grupo = _grupo_com_papel(grupo, usuario).model_dump()
+    dados_grupo = _grupo_com_papel(
+        grupo,
+        usuario,
+        gestor_nome,
+    ).model_dump()
     ordem_recebimento = None
     if grupo.status in ("ATIVO", "ENCERRADO"):
         ordem_recebimento = [
@@ -475,6 +533,29 @@ def atualizar_grupo(
 ) -> Grupo:
     grupo = _buscar_grupo_gerenciavel(grupo_id, gestor, db)
     alteracoes = dados.model_dump(exclude_unset=True)
+
+    primeiro_aceite = db.scalar(
+        select(Participante.id).where(
+            Participante.grupo_id == grupo.id,
+            Participante.usuario_id != grupo.gestor_id,
+        ).limit(1)
+    )
+    if primeiro_aceite is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "As condições do Grupo não podem ser alteradas após "
+                "o primeiro participante aceitar o convite."
+            ),
+        )
+
+    if "nome" in alteracoes:
+        _garantir_nome_disponivel(
+            alteracoes["nome"],
+            gestor.id,
+            db,
+            grupo_id_ignorado=grupo.id,
+        )
 
     nova_quantidade = alteracoes.get(
         "quantidade_participantes",

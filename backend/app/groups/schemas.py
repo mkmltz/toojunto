@@ -26,7 +26,9 @@ class GrupoCriacao(BaseModel):
     @classmethod
     def validar_data_inicio(cls, data_inicio: date) -> date:
         if data_inicio < date.today():
-            raise ValueError("A data de início não pode estar no passado.")
+            raise ValueError(
+                "A data de início do grupo não pode ser menor que a data de hoje."
+            )
         return data_inicio
 
     @model_validator(mode="after")
@@ -69,7 +71,9 @@ class GrupoAtualizacao(BaseModel):
         if data_inicio is None:
             raise ValueError("A data de início não pode ser nula.")
         if data_inicio < date.today():
-            raise ValueError("A data de início não pode estar no passado.")
+            raise ValueError(
+                "A data de início do grupo não pode ser menor que a data de hoje."
+            )
         return data_inicio
 
     @model_validator(mode="after")
@@ -101,6 +105,7 @@ class PapelGrupo(str, Enum):
 
 class GrupoComPapelResposta(GrupoResposta):
     papel: PapelGrupo
+    gestor_nome: str
 
 
 class GrupoListaResposta(GrupoComPapelResposta):

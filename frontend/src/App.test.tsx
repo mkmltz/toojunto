@@ -10,7 +10,15 @@ function resposta(corpo: unknown, status = 200): Response {
 }
 
 function grupo(sobrescritas: Partial<GrupoDetalhe & GrupoLista> = {}): GrupoDetalhe & GrupoLista {
-  return { id: 1, nome: "Grupo dos Amigos", gestor_id: 1, valor_cota: "200.00", valor_premio: "2000.00", quantidade_participantes: 10, quantidade_ciclos: 10, data_inicio: "2026-10-01", status: "RASCUNHO", created_at: "2026-09-16T12:00:00", papel: "GESTOR", vagas_disponiveis: 8, formacao: { quantidade_atual: 2, limite: 10, vagas_disponiveis: 8, participantes: [{ nome: "Ana Souza", papel: "GESTOR" }, { nome: "Bruno Lima", papel: "PARTICIPANTE" }] }, ...sobrescritas };
+  return { id: 1, nome: "Grupo dos Amigos", gestor_id: 1, gestor_nome: "Ana Souza", valor_cota: "200.00", valor_premio: "2000.00", quantidade_participantes: 10, quantidade_ciclos: 10, data_inicio: "2026-10-01", status: "RASCUNHO", created_at: "2026-09-16T12:00:00", papel: "GESTOR", vagas_disponiveis: 8, formacao: { quantidade_atual: 2, limite: 10, vagas_disponiveis: 8, participantes: [{ nome: "Ana Souza", papel: "GESTOR" }, { nome: "Bruno Lima", papel: "PARTICIPANTE" }] }, ...sobrescritas };
+}
+
+function grupoEditavel(sobrescritas: Partial<GrupoDetalhe & GrupoLista> = {}): GrupoDetalhe & GrupoLista {
+  return grupo({
+    vagas_disponiveis: 9,
+    formacao: { quantidade_atual: 1, limite: 10, vagas_disponiveis: 9, participantes: [{ nome: "Ana Souza", papel: "GESTOR" }] },
+    ...sobrescritas,
+  });
 }
 
 const convite = {
@@ -49,11 +57,18 @@ describe("US-003.1 e US-004", () => {
   beforeEach(() => { localStorage.clear(); vi.stubGlobal("fetch", vi.fn()); });
 
   it("carrega Meus Grupos com dados simples de gestor e participante", async () => {
-    await autenticar([grupo(), grupo({ id: 2, nome: "Grupo da Família", papel: "PARTICIPANTE", gestor_id: 9 })]);
+    await autenticar([grupo(), grupo({ id: 2, nome: "Grupo da Família", papel: "PARTICIPANTE", gestor_id: 9, gestor_nome: "Carlos Lima" })]);
     expect(screen.getByText("Grupo dos Amigos")).toBeInTheDocument();
     expect(screen.getByText("Grupo da Família")).toBeInTheDocument();
     expect(screen.getByText("Gestor")).toBeInTheDocument();
     expect(screen.getByText("Participante")).toBeInTheDocument();
+    expect(screen.getByText("Gestor: Ana Souza")).toBeInTheDocument();
+    expect(screen.getByText("Gestor: Carlos Lima")).toBeInTheDocument();
+    expect(screen.queryByText(/@example.com/)).not.toBeInTheDocument();
+    const cardProprio = screen.getByText("Grupo dos Amigos").closest("article")!;
+    const papel = within(cardProprio).getByText("Gestor");
+    const nomeGestor = within(cardProprio).getByText("Gestor: Ana Souza");
+    expect(papel.compareDocumentPosition(nomeGestor) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getAllByText("R$ 200,00")).toHaveLength(2);
     expect(screen.getAllByText("R$ 2.000,00")).toHaveLength(2);
   });
@@ -96,16 +111,16 @@ describe("US-003.1 e US-004", () => {
   });
 
   it("edita, recalcula visualmente e envia somente campos permitidos", async () => {
-    await abrirDetalhes();
+    await abrirDetalhes(grupoEditavel());
     fireEvent.click(screen.getByRole("button", { name: "Editar grupo" }));
     preencherFormulario();
     expect(screen.getByLabelText("Quantidade de ciclos")).toHaveValue(8);
     expect(screen.getByText("R$ 2.000,00")).toBeInTheDocument();
-    const atualizado = { ...grupo(), nome: "Grupo Atualizado", valor_cota: "250.00", valor_premio: "2000.00", quantidade_participantes: 8, quantidade_ciclos: 8, data_inicio: "2026-11-01", formacao: { ...grupo().formacao, limite: 8, vagas_disponiveis: 6 } };
+    const atualizado = { ...grupoEditavel(), nome: "Grupo Atualizado", valor_cota: "250.00", valor_premio: "2000.00", quantidade_participantes: 8, quantidade_ciclos: 8, data_inicio: "2026-11-01", formacao: { ...grupoEditavel().formacao, limite: 8, vagas_disponiveis: 7 } };
     vi.mocked(fetch).mockResolvedValueOnce(resposta(atualizado)).mockResolvedValueOnce(resposta(atualizado));
     fireEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
     expect(await screen.findByText("Grupo atualizado com sucesso.")).toBeInTheDocument();
-    expect(screen.getByText("2 de 8 pessoas")).toBeInTheDocument();
+    expect(screen.getByText("1 de 8 pessoas")).toBeInTheDocument();
     const payload = { nome: "Grupo Atualizado", valor_cota: "250.00", quantidade_participantes: 8, data_inicio: "2026-11-01" };
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1", expect.objectContaining({ method: "PATCH", body: JSON.stringify(payload) }));
     expect(payload).not.toHaveProperty("quantidade_ciclos");
@@ -148,7 +163,7 @@ describe("US-003.1 e US-004", () => {
     [422, "Confira os dados"],
     [500, "Falha interna"],
   ])("trata erro %s na edição", async (status, mensagem) => {
-    await abrirDetalhes();
+    await abrirDetalhes(grupoEditavel());
     fireEvent.click(screen.getByRole("button", { name: "Editar grupo" }));
     vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: status === 500 ? "Falha interna" : "erro" }, status));
     fireEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
@@ -156,7 +171,7 @@ describe("US-003.1 e US-004", () => {
   });
 
   it("trata 409 e recarrega o grupo", async () => {
-    await abrirDetalhes();
+    await abrirDetalhes(grupoEditavel());
     fireEvent.click(screen.getByRole("button", { name: "Editar grupo" }));
     vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "conflito" }, 409)).mockResolvedValueOnce(resposta(grupo({ status: "CANCELADO" })));
     fireEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
@@ -193,6 +208,47 @@ describe("US-003.1 e US-004", () => {
     expect(ultimaChamada[1]).toEqual(expect.objectContaining({ method: "POST" }));
     expect(JSON.parse(String(ultimaChamada[1]?.body))).toEqual(payload);
     expect(payload).not.toHaveProperty("valor_premio");
+  });
+
+  it("mostra erro específico de data e preserva o formulário", async () => {
+    await autenticar();
+    fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" }));
+    preencherFormulario("Grupo Data", "180.00", "4");
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: [{ loc: ["body", "data_inicio"], msg: "Value error, A data de início do grupo não pode ser menor que a data de hoje.", type: "value_error" }] }, 422));
+
+    fireEvent.click(screen.getByRole("button", { name: "Criar grupo" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("A data de início do grupo não pode ser menor que a data de hoje.");
+    expect(screen.getByLabelText("Nome do grupo *")).toHaveValue("Grupo Data");
+    expect(screen.getByLabelText("Valor por ciclo (R$) *")).toHaveValue(180);
+    expect(screen.getByLabelText("Data de início *")).toHaveAttribute("min");
+  });
+
+  it("mostra erro específico de nome duplicado na criação", async () => {
+    await autenticar();
+    fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" }));
+    preencherFormulario("Amigos", "200.00", "5");
+    const mensagem = 'Você já possui um grupo ativo chamado "Amigos". Escolha outro nome para o novo grupo.';
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: mensagem }, 409));
+
+    fireEvent.click(screen.getByRole("button", { name: "Criar grupo" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(mensagem);
+    expect(screen.getByLabelText("Nome do grupo *")).toHaveValue("Amigos");
+  });
+
+  it("mostra erro específico de nome duplicado na edição", async () => {
+    const editavel = grupoEditavel();
+    await abrirDetalhes(editavel);
+    fireEvent.click(screen.getByRole("button", { name: "Editar grupo" }));
+    fireEvent.change(screen.getByLabelText("Nome do grupo *"), { target: { value: "Amigos" } });
+    const mensagem = 'Você já possui um grupo ativo chamado "Amigos". Escolha outro nome para o novo grupo.';
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: mensagem }, 409)).mockResolvedValueOnce(resposta(editavel));
+
+    fireEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(mensagem);
+    expect(screen.getByLabelText("Nome do grupo *")).toHaveValue("Amigos");
   });
 
   it("preserva login e logout", async () => {
@@ -255,11 +311,19 @@ describe("US-007", () => {
     expect(screen.getByText("Grupo completo.")).toBeInTheDocument();
   });
 
-  it("mantém as ações do Gestor", async () => {
-    await abrirDetalhes();
+  it("mantém edição antes do primeiro aceite", async () => {
+    await abrirDetalhes(grupoEditavel());
 
     expect(screen.getByRole("button", { name: "Convidar pessoas" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Editar grupo" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancelar grupo" })).toBeInTheDocument();
+  });
+
+  it("oculta edição após aceite e preserva cancelamento", async () => {
+    await abrirDetalhes();
+
+    expect(screen.queryByRole("button", { name: "Editar grupo" })).not.toBeInTheDocument();
+    expect(screen.getByText("As regras deste grupo não podem mais ser alteradas porque um participante já aceitou o convite.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancelar grupo" })).toBeInTheDocument();
   });
 
