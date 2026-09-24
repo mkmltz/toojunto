@@ -1,0 +1,15 @@
+.env
+.env.*
+.git
+.gitignore
+node_modules
+dist
+coverage
+.cache
+.vite
+*.tmp
+*.temp
+api-url.test.ts
+src/**/*.test.ts
+src/**/*.test.tsx
+src/test
