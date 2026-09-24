@@ -95,6 +95,11 @@ describe("US-003.1 e US-004", () => {
     expect(localStorage.getItem("toojunto_selected_group_id")).toBe("1");
     expect(screen.getByText("Seu papel: Gestor")).toBeInTheDocument();
     expect(screen.getByText("01/10/2026")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Navegação principal" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Pagamentos")).not.toBeInTheDocument();
+    expect(screen.queryByText("Histórico")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "← Voltar para Meus Grupos" }));
+    expect(await screen.findByRole("heading", { name: "Meus Grupos" })).toBeInTheDocument();
   });
 
   it("restaura detalhes após F5 usando GET", async () => {
