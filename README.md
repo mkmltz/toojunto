@@ -57,6 +57,12 @@ PYTHONPATH=backend python -m app.init_db
 PYTHONPATH=backend uvicorn app.main:app --reload
 ```
 
+O comando acima e a opção `--reload` são exclusivos de development. Em
+production, use `APP_ENV=production`, configure `DATABASE_URL`, `JWT_SECRET`,
+`ALLOWED_HOSTS` e, quando necessário, `CORS_ORIGINS` explicitamente, e nunca
+execute o Uvicorn com `--reload`. O comando definitivo de produção será
+definido no empacotamento do Sprint 8.3.
+
 Health:
 - `/health`
 - `/health/db`
