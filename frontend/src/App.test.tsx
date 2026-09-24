@@ -90,6 +90,7 @@ describe("US-003.1 e US-004", () => {
 
   it("abre detalhes por GET e persiste o id selecionado", async () => {
     await abrirDetalhes();
+    expect(screen.getByRole("img", { name: "TooJunto" })).toHaveAttribute("src", "/brand/toojunto-logo-header.png");
     expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups/1", expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
     expect(localStorage.getItem("toojunto_selected_group_id")).toBe("1");
     expect(screen.getByText("Seu papel: Gestor")).toBeInTheDocument();
@@ -264,6 +265,7 @@ describe("US-003.1 e US-004", () => {
   it("preserva login e logout", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(resposta({ access_token: "token-valido", token_type: "bearer" })).mockResolvedValueOnce(resposta(usuario)).mockResolvedValueOnce(resposta([]));
     render(<App />);
+    expect(screen.getByRole("img", { name: "TooJunto" })).toHaveAttribute("src", "/brand/toojunto-logo-header.png");
     fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "ana@example.com" } });
     fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "senha-segura" } });
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
@@ -1014,6 +1016,7 @@ describe("US-014A - cadastro", () => {
 
   it("exige telefone e apresenta a regra atual de senha", () => {
     abrirCadastro();
+    expect(screen.getByRole("img", { name: "TooJunto" })).toHaveAttribute("src", "/brand/toojunto-logo-header.png");
 
     expect(screen.getByLabelText("Telefone *")).toBeRequired();
     expect(screen.getByLabelText("Senha *")).toHaveAttribute("minlength", "8");
@@ -1094,6 +1097,7 @@ describe("US-006", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Você foi convidado por Carlos Lima" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "TooJunto" })).toHaveAttribute("src", "/brand/toojunto-logo-header.png");
     expect(screen.getByText("Caso você ainda não tenha conta no TooJunto, crie sua conta para participar.")).toBeInTheDocument();
     expect(screen.getByText("Grupo Convidado")).toBeInTheDocument();
     expect(screen.getByText("R$ 150,00")).toBeInTheDocument();
