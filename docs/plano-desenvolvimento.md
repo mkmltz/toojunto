@@ -192,9 +192,8 @@ durante a implementação e os testes com usuários.
 -   Variáveis de ambiente e testes básicos configurados.
 -   Base técnica pronta para desenvolvimento incremental.
 
-Observação técnica: migrations versionadas permanecem como dívida
-técnica; o ambiente atual ainda utiliza criação/sincronização de tabelas
-sem Alembic.
+Observação histórica: migrations versionadas permaneceram como dívida técnica
+até a conclusão da US-015 no Sprint 9.
 
 ## Sprint 1 --- Autenticação --- DONE
 
@@ -592,7 +591,7 @@ concluída sem evidência.
   DEV-001   Repositório e          P0               DONE
             estrutura base
 
-  DEV-002   PostgreSQL e estrutura P0               DONE parcial --- migrations pendentes
+  DEV-002   PostgreSQL e estrutura P0               DONE
             de dados
 
   DEV-003   Autenticação           P1               DONE
@@ -639,7 +638,7 @@ impacto justificar a implementação.
   ---------------------------------------------------------------------------------------------------------
   ID       Dívida técnica               Origem     Impacto                         Prioridade    Status
   -------- ---------------------------- ---------- ------------------------------- ------------- ----------
-  DT-001   Implementar migrations       Sprint 0 / Mudanças futuras de banco ficam Média         PENDENTE
+  DT-001   Implementar migrations       Sprint 0 / Mudanças futuras de banco ficam Média         DONE --- US-015
            versionadas com Alembic.     Sprint 2   menos controladas e
                                                    reproduzíveis.
 
@@ -728,8 +727,8 @@ depreciados de datetime.utcnow(), além de avisos de compatibilidade
 futura Starlette/httpx e AnyIO e aviso ambiental do cache do pytest por
 falta de permissão. Esses avisos não bloquearam a homologação funcional.
 
-Permanecem como dívidas técnicas: migrations/Alembic; coluna
-usuarios.telefone ainda nullable no banco embora novos cadastros exijam
+Permanecem como dívidas técnicas: coluna usuarios.telefone ainda nullable no
+banco embora novos cadastros exijam
 telefone pelo contrato; avaliação de constraint/índice para unicidade do
 nome do Grupo por Gestor; e demais itens já registrados nesta seção.
 
@@ -1069,3 +1068,19 @@ necessidade comprovada.
 
 A Matriz Oficial de Eventos e Notificações em `requisitos.md` é a
 referência funcional para destinatários e ações.
+
+## 21.7 Execução do Sprint 9
+
+-   **TASK 9.1 --- DONE:** infraestrutura Alembic configurada com a URL e o
+    metadata da aplicação.
+-   **TASK 9.2 --- DONE:** baseline MVP 0.1 `9b2f1c4d7e6a` criada e validada
+    em ciclo completo de upgrade, downgrade e reaplicação.
+-   **TASK 9.3 --- DONE:** adoção segura de banco legado implementada e
+    validada, com bloqueio de schema incompatível e preservação dos dados.
+-   **TASK 9.4 --- DONE:** operação oficial documentada e validações finais
+    aprovadas.
+-   **US-015 --- DONE:** migrations versionadas concluídas.
+-   **US-016 --- PENDENTE:** backup e restauração do PostgreSQL ainda serão
+    definidos e validados.
+-   **US-017 --- PENDENTE:** deploy seguro no STAGING ainda será definido e
+    validado.

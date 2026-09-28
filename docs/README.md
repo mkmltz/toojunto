@@ -47,6 +47,8 @@ Nunca corrigir código manualmente na VPS.
 -   `plano-desenvolvimento.md` --- histórico do MVP 0.1 e roadmap
     executivo das Sprints 9--15.
 -   `compose-producao.md` --- operação do stack Docker usado no staging.
+    Também é a referência operacional principal para migrations, adoção segura
+    de bancos legados e rollback de schema.
 
 ## Escopo central do MVP 0.2
 

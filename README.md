@@ -45,17 +45,24 @@ docker compose up -d db
 pip install -r backend/requirements.txt
 ```
 
-4. Inicialize as tabelas:
+4. Aplique as migrations a partir do diretório `backend`:
 
 ```bash
-PYTHONPATH=backend python -m app.init_db
+cd backend
+python -m alembic upgrade head
 ```
 
 5. Rode a API:
 
 ```bash
-PYTHONPATH=backend uvicorn app.main:app --reload
+uvicorn app.main:app --reload
 ```
+
+Migrations são o mecanismo oficial para construir e evoluir o schema. O
+procedimento completo para bancos novos, bancos legados e rollback está em
+[`docs/compose-producao.md`](docs/compose-producao.md#operação-de-migrations).
+`app.init_db` permanece temporariamente no código apenas por compatibilidade e
+não deve ser usado para criar novos ambientes.
 
 O comando acima e a opção `--reload` são exclusivos de development. Em
 production, use `APP_ENV=production`, configure `DATABASE_URL`, `JWT_SECRET`,
