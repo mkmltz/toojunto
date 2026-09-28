@@ -13,6 +13,8 @@ dist/
 production.env
 *.tmp
 *.temp
+*.dump
+backups/
 tmp/
 temp/
 .coverage

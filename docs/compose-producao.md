@@ -4,9 +4,9 @@ Esta configuração integra Frontend, Backend e PostgreSQL sem configurar
 VPS, domínio ou HTTPS. Somente o Frontend publica uma porta no host.
 Backend e banco permanecem acessíveis apenas pela rede Docker.
 
-> **STAGING existente:** não execute os comandos de adoção ou migration deste
-> documento no banco atual antes da conclusão da US-016 e da autorização
-> operacional prevista para a US-017. O exemplo de primeira inicialização
+> **STAGING existente:** não execute os comandos de backup, restore, adoção ou
+> migration deste documento no banco atual sem a etapa operacional controlada
+> e a autorização prevista para a US-017. O exemplo de primeira inicialização
 > abaixo destina-se a um banco novo e vazio.
 
 ## Variáveis
@@ -99,7 +99,7 @@ python -m alembic downgrade <revision>
 Revise o `downgrade()` e avalie o impacto antes da execução. Downgrade altera o
 schema e pode ser destrutivo; ele **não é backup** e não restaura dados
 eliminados ou transformados. Backup e restauração são controles separados e
-serão formalizados na US-016.
+estão definidos na seção [Backup e restauração do PostgreSQL](#backup-e-restauração-do-postgresql).
 
 ### Futuras alterações de schema
 
@@ -131,10 +131,114 @@ STAGING/PILOTO. Não execute `app.adopt_mvp_0_1`, `alembic stamp`, `alembic
 upgrade` ou `alembic downgrade` nesse ambiente sem backup verificável e sem a
 autorização operacional correspondente.
 
-A US-016 deve primeiro definir e validar backup e restauração do PostgreSQL. A
-adoção do banco do piloto só poderá ocorrer depois disso. A US-017 definirá em
-seguida o procedimento seguro de deploy, migrations, verificações de saúde e
-rollback no STAGING.
+O procedimento da US-016 foi validado somente em ambiente local descartável;
+nenhum backup real do piloto existe como resultado dessa validação. A adoção do
+banco do piloto exige primeiro um backup real verificado em etapa operacional
+posterior. A US-017 definirá o procedimento seguro de deploy, migrations,
+verificações de saúde e rollback no STAGING.
+
+## Backup e restauração do PostgreSQL
+
+O procedimento abaixo usa `pg_dump` e `pg_restore` do PostgreSQL 16 dentro do
+serviço Docker `db`. Ele foi validado localmente com bancos descartáveis. Ainda
+não foi executado no STAGING/PILOTO.
+
+### Pré-requisitos
+
+-   Docker e Docker Compose disponíveis;
+-   serviço `db` em execução e saudável;
+-   arquivo Compose e arquivo de ambiente explicitamente identificados;
+-   espaço livre suficiente fora do container;
+-   acesso restrito ao diretório que receberá o backup.
+
+O utilitário não lê nem imprime a senha. As ferramentas PostgreSQL usam as
+variáveis já presentes no serviço `db` e sua conexão local. Não coloque senha,
+URL real ou conteúdo do arquivo de ambiente na linha de comando ou em logs.
+
+### Criar backup
+
+Na raiz do repositório:
+
+``` bash
+python backend/scripts/postgres_backup.py \
+  --compose-file docker-compose.prod.yml \
+  --env-file production.env \
+  --project-name toojunto \
+  backup \
+  --output-dir backups
+```
+
+O resultado usa formato custom (`pg_dump -Fc`) e nome UTC no padrão
+`toojunto_YYYYMMDD_HHMMSS_utc.dump`. A gravação ocorre primeiro em arquivo
+temporário; somente um dump não vazio e reconhecido por `pg_restore --list` é
+promovido ao nome definitivo. Falha do `pg_dump` ou da validação retorna código
+de erro e remove o arquivo parcial.
+
+O diretório `backups/` e arquivos `*.dump` são ignorados pelo Git. Mesmo assim,
+confirme `git status` após a operação.
+
+### Restaurar em banco vazio
+
+O database alvo deve existir, estar vazio e ser inequivocamente diferente de
+`POSTGRES_DB`. O utilitário não cria, apaga ou limpa databases. A criação do
+destino deve ser uma ação separada e consciente, por exemplo:
+
+``` bash
+docker compose --env-file production.env -f docker-compose.prod.yml \
+  exec -T db sh -c 'createdb --username="$POSTGRES_USER" toojunto_restore'
+```
+
+Depois restaure informando e confirmando explicitamente o mesmo destino:
+
+``` bash
+python backend/scripts/postgres_backup.py \
+  --compose-file docker-compose.prod.yml \
+  --env-file production.env \
+  --project-name toojunto \
+  restore \
+  --backup-file backups/toojunto_YYYYMMDD_HHMMSS_utc.dump \
+  --target-db toojunto_restore \
+  --confirm-target-db toojunto_restore
+```
+
+O restore usa `pg_restore --single-transaction --exit-on-error`, não restaura
+owners ou privilégios globais e só informa sucesso depois da conclusão. Ele
+recusa arquivo inexistente/vazio, confirmação divergente, o database primário
+e destino que já contenha relações de usuário. Não existe opção automática de
+`--clean`: qualquer descarte de banco é uma operação distinta e destrutiva que
+exige procedimento e autorização próprios.
+
+### Validar a restauração
+
+Configure temporariamente a aplicação para apontar ao database restaurado e
+verifique:
+
+``` bash
+python -m alembic current
+python -m alembic check
+python -m alembic upgrade head
+```
+
+Também compare com a origem:
+
+-   revision em `alembic_version`;
+-   sete tabelas da aplicação;
+-   contagens por tabela e dados sentinela;
+-   PKs, FKs, constraints e índices relevantes;
+-   ausência de alterações após `upgrade head`.
+
+Um backup somente é considerado válido depois de um restore verificado. O
+restore não substitui a inspeção de integridade nem autoriza migrations ou
+deploy.
+
+### Segurança dos arquivos
+
+Backups podem conter dados pessoais, hashes de senha, tokens de convite e
+referências a comprovantes. Não versione, não compartilhe por canais não
+autorizados e restrinja permissões e acesso ao diretório. Remova cópias locais
+descartáveis ao terminar a validação. Retenção, armazenamento externo,
+agendamento e execução do primeiro backup real do piloto não fazem parte deste
+procedimento.
 
 ## Operação
 
@@ -180,4 +284,4 @@ Regras operacionais:
 O procedimento com `app.init_db` permanece temporariamente apenas por
 compatibilidade. A operação oficial de schema está definida na seção
 [Operação de migrations](#operação-de-migrations), respeitando a proteção do
-STAGING até a conclusão das US-016 e US-017.
+STAGING e o procedimento operacional ainda pendente da US-017.
