@@ -1079,8 +1079,12 @@ referência funcional para destinatários e ações.
     validada, com bloqueio de schema incompatível e preservação dos dados.
 -   **TASK 9.4 --- DONE:** operação oficial documentada e validações finais
     aprovadas.
+-   **TASK 9.5 --- DONE:** backup e restore PostgreSQL validados localmente com
+    preservação de schema, dados e revision Alembic.
+-   **TASK 9.6 --- DONE:** runbook de deploy seguro preparado e validado
+    localmente; nenhuma operação foi executada no STAGING.
 -   **US-015 --- DONE:** migrations versionadas concluídas.
--   **US-016 --- PENDENTE:** backup e restauração do PostgreSQL ainda serão
-    definidos e validados.
--   **US-017 --- PENDENTE:** deploy seguro no STAGING ainda será definido e
-    validado.
+-   **US-016 --- DONE:** backup e restauração do PostgreSQL definidos e
+    validados em ambiente local descartável.
+-   **US-017 --- PENDENTE:** o procedimento está preparado, mas sua execução
+    real controlada no STAGING e a decisão de encerramento permanecem pendentes.

@@ -240,6 +240,273 @@ descartáveis ao terminar a validação. Retenção, armazenamento externo,
 agendamento e execução do primeiro backup real do piloto não fazem parte deste
 procedimento.
 
+## Runbook de deploy seguro no STAGING
+
+Este runbook foi preparado e validado localmente. Ele ainda não foi executado
+na VPS. Cada bloco é um gate: diante de resultado inesperado, interrompa o
+deploy, preserve as evidências e não avance por tentativa e erro.
+
+Use sempre o mesmo identificador de projeto Compose:
+
+``` bash
+COMPOSE="docker compose --project-name toojunto --env-file production.env -f docker-compose.prod.yml"
+```
+
+Não use `set -x`, não imprima `production.env` e não copie valores sensíveis
+para logs ou tickets.
+
+### 1. Pré-deploy
+
+#### 1.1 Versão homologada e repositório
+
+Antes de atualizar o checkout, registre o commit atualmente implantado e o
+commit homologado que será promovido:
+
+``` bash
+cd /opt/toojunto
+test -z "$(git status --porcelain)"
+CURRENT_COMMIT=$(git rev-parse HEAD)
+git branch --show-current
+git rev-parse HEAD
+git fetch --prune origin
+git cat-file -e "${TARGET_COMMIT}^{commit}"
+git checkout --detach "$TARGET_COMMIT"
+test "$(git rev-parse HEAD)" = "$TARGET_COMMIT"
+```
+
+`TARGET_COMMIT` deve ser informado explicitamente a partir da versão homologada;
+não use simplesmente o estado mais recente de uma branch. Working tree sujo,
+commit ausente ou divergente aborta o procedimento.
+
+#### 1.2 Ambiente, Docker e Compose
+
+Confirme a presença das variáveis obrigatórias sem exibir valores:
+
+``` bash
+test -f production.env
+for name in POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD DATABASE_URL JWT_SECRET ALLOWED_HOSTS; do
+  grep -qE "^${name}=.+" production.env || { echo "Variável obrigatória ausente: ${name}"; exit 1; }
+done
+docker version
+docker compose version
+$COMPOSE config --quiet
+```
+
+Nunca use `docker compose config` sem `--quiet` em logs compartilhados, pois a
+saída expandida pode conter secrets.
+
+#### 1.3 Estado atual e capacidade
+
+Registre containers, imagens, health, uso de disco e volume antes de alterar
+qualquer serviço:
+
+``` bash
+$COMPOSE ps
+$COMPOSE images
+DB_CONTAINER=$($COMPOSE ps -q db)
+test -n "$DB_CONTAINER"
+docker inspect "$DB_CONTAINER" --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}'
+docker volume inspect toojunto_toojunto_prod_pgdata --format '{{.Name}} {{.Mountpoint}}'
+df -h / /var/lib/docker /opt/toojunto
+```
+
+Os nomes efetivos do container e volume devem ser confirmados por `$COMPOSE ps`
+e `docker volume ls`; não presuma nomes se o projeto já tiver sido iniciado com
+outro identificador. Falta de espaço ou estado atual não saudável exige análise
+antes de continuar.
+
+Prepare o diretório protegido de backup e confira suas permissões:
+
+``` bash
+install -d -m 700 backups
+test "$(stat -c '%a' backups)" = "700"
+```
+
+### 2. Gate obrigatório de backup
+
+Nenhuma adoção, migration ou atualização de container pode ocorrer antes deste
+gate:
+
+``` bash
+python backend/scripts/postgres_backup.py \
+  --compose-file docker-compose.prod.yml \
+  --env-file production.env \
+  --project-name toojunto \
+  backup \
+  --output-dir backups
+```
+
+Registre nome, timestamp e tamanho do arquivo. O comando já exige dump não
+vazio e valida o formato com `pg_restore --list`. Confirme ainda que o arquivo
+está ignorado pelo Git:
+
+``` bash
+git status --short --ignored backups
+```
+
+Se o comando falhar, se não houver arquivo válido ou se a proteção do diretório
+for inadequada, **aborte o deploy**. Não existe exceção para “mudança sem risco”.
+
+### 3. Build e identificação da migration
+
+O build deve terminar antes de qualquer alteração no banco; falha de build
+mantém os containers atuais em execução:
+
+``` bash
+$COMPOSE build
+$COMPOSE run --rm --no-deps backend python -m alembic history
+$COMPOSE run --rm --no-deps backend python -m alembic heads
+```
+
+Compare a head retornada com a revision prevista na versão homologada. Enquanto
+não houver migration posterior, a única head esperada é `9b2f1c4d7e6a`. Head
+ausente, múltipla ou inesperada aborta o deploy.
+
+### 4. Primeiro deploy pós-Alembic
+
+O banco atual do piloto foi criado antes do Alembic. Identifique o estado sem
+alterá-lo:
+
+``` bash
+$COMPOSE exec -T \
+  -e "CHECK_SQL=SELECT(to_regclass('public.alembic_version')NOTNULL);" \
+  db sh -c 'exec psql --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" \
+  --tuples-only --no-align --command="$CHECK_SQL"'
+```
+
+Se retornar `f`, execute **uma única vez** o comando de adoção segura:
+
+``` bash
+$COMPOSE run --rm --no-deps backend python -m app.adopt_mvp_0_1
+```
+
+Esse comando valida todo o schema antes de registrar a baseline fixa. Qualquer
+divergência ou erro aborta o deploy. Não corrija automaticamente o banco e não
+use `alembic stamp head`.
+
+Se a consulta retornar `t`, o banco já possui controle Alembic: não execute a
+adoção novamente. Confira diretamente:
+
+``` bash
+$COMPOSE run --rm --no-deps backend python -m alembic current
+```
+
+Após adoção ou confirmação, prossiga pelo fluxo comum de migration.
+
+### 5. Deploys subsequentes e migrations
+
+Em todo deploy com banco já controlado:
+
+``` bash
+$COMPOSE run --rm --no-deps backend python -m alembic current
+$COMPOSE run --rm --no-deps backend python -m alembic upgrade head
+$COMPOSE run --rm --no-deps backend python -m alembic current
+$COMPOSE run --rm --no-deps backend python -m alembic check
+```
+
+Falha de migration ou drift impede a atualização dos containers. Registre a
+revision anterior, a revision alcançada e o erro; não declare sucesso e não
+execute downgrade ou restore automaticamente.
+
+### 6. Atualização controlada dos serviços
+
+O PostgreSQL deve permanecer em execução e seu volume deve ser preservado.
+Atualize primeiro o Backend, aguarde health e depois atualize o Frontend:
+
+``` bash
+$COMPOSE up -d --no-deps backend
+$COMPOSE ps backend
+$COMPOSE exec -T backend python -c \
+  "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"
+$COMPOSE exec -T backend python -c \
+  "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/db', timeout=5)"
+
+$COMPOSE up -d --no-deps frontend
+$COMPOSE ps frontend
+$COMPOSE exec -T frontend wget -q -O /dev/null http://127.0.0.1:8080/
+```
+
+Não execute `docker compose down` como parte do deploy normal. **Nunca execute
+`docker compose down -v`**, `docker volume rm` ou comando equivalente: o volume
+`toojunto_prod_pgdata` contém o banco persistente.
+
+### 7. Health checks e smoke tests
+
+Primeiro confirme internamente todos os serviços:
+
+``` bash
+$COMPOSE ps
+$COMPOSE exec -T db sh -c 'pg_isready --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"'
+$COMPOSE exec -T backend python -c \
+  "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"
+$COMPOSE exec -T backend python -c \
+  "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/db', timeout=5)"
+$COMPOSE exec -T frontend wget -q -O /dev/null http://127.0.0.1:8080/
+```
+
+Depois execute os smokes públicos, somente leitura:
+
+``` bash
+curl -fsS https://toojunto.com/ -o /dev/null
+curl -fsS https://toojunto.com/invites/smoke-deploy -o /dev/null
+curl -fsS https://toojunto.com/api/health
+curl -fsS https://toojunto.com/api/health/db
+curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' https://www.toojunto.com/
+```
+
+A página principal e a rota SPA devem responder, os dois health checks devem
+indicar sucesso, HTTPS deve ser válido e `www` deve redirecionar ao domínio
+canônico. Esses testes não criam nem alteram dados funcionais.
+
+### 8. Rollback da aplicação
+
+Use rollback da aplicação quando o problema estiver no código/container e o
+schema continuar compatível com a versão anterior:
+
+1.  preserve logs, commit implantado, `current`, imagens e health;
+2.  volte o checkout ao `CURRENT_COMMIT` registrado no início;
+3.  reconstrua as imagens dessa revisão;
+4.  atualize Backend e Frontend na mesma ordem controlada;
+5.  repita health checks e smoke tests.
+
+``` bash
+git checkout --detach "$CURRENT_COMMIT"
+$COMPOSE build backend frontend
+$COMPOSE up -d --no-deps backend
+$COMPOSE up -d --no-deps frontend
+```
+
+Não inicie a aplicação anterior se ela for incompatível com o schema já
+migrado. Nesse caso, interrompa e trate o banco separadamente.
+
+### 9. Rollback do banco
+
+Rollback de aplicação não desfaz schema ou dados. `alembic downgrade` somente
+pode ser usado quando o `downgrade()` foi revisado, testado e preserva os dados
+necessários. Ele não substitui restore.
+
+Se a migration alterar ou destruir dados, pode ser necessário restaurar o
+backup em um **database distinto e vazio**, validar integralmente e decidir de
+forma explícita como redirecionar a aplicação. O utilitário de restore recusa o
+database primário e nunca executa automaticamente. Não sobrescreva o banco do
+piloto e não altere `production.env` sem autorização operacional específica.
+
+### 10. Encerramento
+
+O deploy somente termina após registrar:
+
+-   commit anterior e commit implantado;
+-   arquivo, horário e tamanho do backup validado;
+-   revision Alembic antes e depois;
+-   resultado do build e identificação das imagens;
+-   estado/health de todos os containers;
+-   resultado de cada smoke test;
+-   horário final e responsável pela execução.
+
+Qualquer gate não aprovado mantém o deploy como falho ou interrompido. A
+execução real deste runbook no STAGING requer autorização separada e será a
+evidência necessária para decidir o encerramento da US-017.
+
 ## Operação
 
 ``` bash
