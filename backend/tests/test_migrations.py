@@ -23,12 +23,17 @@ EXPECTED_TABLES = {
 }
 
 
-def test_alembic_configuration_loads_without_revisions():
+def test_alembic_has_single_mvp_baseline_and_head():
     config = Config(ALEMBIC_CONFIG)
     scripts = ScriptDirectory.from_config(config)
+    revisions = list(scripts.walk_revisions())
 
     assert Path(scripts.dir).resolve() == BACKEND_ROOT / "migrations"
-    assert list(scripts.walk_revisions()) == []
+    assert len(revisions) == 1
+    assert revisions[0].revision == "9b2f1c4d7e6a"
+    assert revisions[0].down_revision is None
+    assert revisions[0].doc == "baseline MVP 0.1"
+    assert scripts.get_heads() == ["9b2f1c4d7e6a"]
 
 
 def test_alembic_env_uses_application_database_url_and_metadata(monkeypatch):
