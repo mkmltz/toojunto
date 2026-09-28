@@ -75,3 +75,13 @@ Sprint 1 — Autenticação:
 - JWT
 - autorização básica
 - integração das telas reais do protótipo
+
+## Estado atual e ambientes — revisão 28/09/2026
+
+O MVP 0.1 está funcionalmente homologado. O desenvolvimento continua local. A VPS Hostinger atualmente publicada pelo domínio configurado é ambiente de STAGING para homologação integrada e piloto controlado; não deve receber desenvolvimento ou correções manuais de código.
+
+Fluxo obrigatório: desenvolvimento local → testes → commit/push → deploy controlado no staging → smoke test → homologação do PO.
+
+O MVP 0.2 está em planejamento e terá como foco comunicação transacional orientada a eventos, notificações in-app, integração com canal externo a definir, webhooks/status de entrega, lembretes operacionais, integração Landing Page → App e correção da nitidez da identidade visual. Chat e respostas livres por mensageria não fazem parte do escopo proposto até decisão explícita do PO.
+
+Documentos canônicos a revisar antes de iniciar o desenvolvimento do MVP 0.2: docs/visao.md, docs/requisitos.md, docs/arquitetura.md e docs/plano-desenvolvimento.md.
