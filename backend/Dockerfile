@@ -11,6 +11,8 @@ RUN python -m pip install --no-cache-dir -r requirements-runtime.lock \
     && groupadd --gid 10001 toojunto \
     && useradd --uid 10001 --gid toojunto --no-create-home --shell /usr/sbin/nologin toojunto
 
+COPY --chown=toojunto:toojunto alembic.ini ./
+COPY --chown=toojunto:toojunto migrations ./migrations
 COPY --chown=toojunto:toojunto app ./app
 
 USER toojunto
