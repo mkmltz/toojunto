@@ -13,12 +13,27 @@ from app.auth.security import criar_token_acesso, gerar_hash_senha
 from app.db import SessionLocal
 from app.main import app
 from app.models import (
-    Convite, EntregaEmail, Grupo, Notificacao, Participante, Usuario,
+    Convite, EntregaEmail, Grupo, Notificacao, Participante, RecusaConvite,
+    Usuario,
 )
 from app.invites.service import aceitar_convite
+from app.notifications import events
 
 
 client = TestClient(app)
+
+
+class RecordingEmailDelivery:
+    def __init__(self, fail: bool = False):
+        self.calls = []
+        self.fail = fail
+
+    def enviar_e_registrar(self, **data):
+        self.calls.append(data)
+        if self.fail:
+            from app.email import EmailDeliveryPersistenceError
+
+            raise EmailDeliveryPersistenceError("falha isolada de teste")
 
 
 @pytest.fixture
@@ -58,6 +73,13 @@ def contexto_convite():
         ).all()
         ids_grupos = [grupo.id for grupo in grupos]
         if ids_grupos:
+            ids_convites = db.scalars(
+                select(Convite.id).where(Convite.grupo_id.in_(ids_grupos))
+            ).all()
+            if ids_convites:
+                db.execute(delete(RecusaConvite).where(
+                    RecusaConvite.convite_id.in_(ids_convites)
+                ))
             db.execute(delete(Convite).where(Convite.grupo_id.in_(ids_grupos)))
             db.execute(
                 delete(Participante).where(Participante.grupo_id.in_(ids_grupos))
@@ -376,10 +398,182 @@ def test_aceite_faz_rollback_quando_persistencia_falha(contexto_convite):
         status="RASCUNHO",
     )
     db = MagicMock()
-    db.scalar.side_effect = [grupo, None, 1]
+    convite = Convite(id=456, grupo_id=grupo.id, token="token")
+    db.execute.return_value.first.return_value = (grupo, convite)
+    db.scalar.side_effect = [None, None, 1]
     db.commit.side_effect = RuntimeError("falha de persistência")
 
     with pytest.raises(RuntimeError, match="falha de persistência"):
         aceitar_convite("token", convidado, db)
 
     db.rollback.assert_called_once_with()
+
+
+def test_destinatario_recusa_sem_criar_participante_e_notifica_gestor(
+    contexto_convite,
+    monkeypatch,
+):
+    gestor, convidado, _, externo = contexto_convite
+    grupo, convite = criar_grupo_e_convite(gestor)
+    delivery = RecordingEmailDelivery()
+    monkeypatch.setattr(events, "_reliable_email_service", lambda: delivery)
+
+    response = client.post(
+        f"/invites/{convite['token']}/reject",
+        headers=headers(convidado),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"group_id": grupo["id"], "status": "RECUSADO"}
+    db = SessionLocal()
+    try:
+        recusa = db.scalar(select(RecusaConvite).where(
+            RecusaConvite.usuario_id == convidado.id
+        ))
+        assert recusa is not None
+        assert db.scalar(select(Participante).where(
+            Participante.grupo_id == grupo["id"],
+            Participante.usuario_id == convidado.id,
+        )) is None
+        grupo_persistido = db.get(Grupo, grupo["id"])
+        assert grupo_persistido.status == "RASCUNHO"
+        assert (
+            grupo_persistido.quantidade_participantes
+            == grupo["quantidade_participantes"]
+        )
+        notificacao = db.scalar(select(Notificacao).where(
+            Notificacao.tipo == "CONVITE_RECUSADO",
+            Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
+        ))
+        assert notificacao.usuario_id == gestor.id
+        assert notificacao.usuario_id not in {convidado.id, externo.id}
+        assert len(delivery.calls) == 1
+        assert delivery.calls[0]["destinatario"] == gestor.email
+        assert delivery.calls[0]["evento"] == "CONVITE_RECUSADO"
+        assert delivery.calls[0]["notificacao_id"] == notificacao.id
+    finally:
+        db.close()
+
+
+def test_recusa_exige_autenticacao_e_nao_permita_gestor_recusar(
+    contexto_convite,
+):
+    gestor, *_ = contexto_convite
+    _, convite = criar_grupo_e_convite(gestor)
+    caminho = f"/invites/{convite['token']}/reject"
+
+    assert client.post(caminho).status_code == 401
+    response = client.post(caminho, headers=headers(gestor))
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Você já participa deste Grupo."}
+
+
+def test_convite_aceito_nao_pode_ser_recusado(contexto_convite):
+    gestor, convidado, *_ = contexto_convite
+    _, convite = criar_grupo_e_convite(gestor)
+    assert client.post(
+        f"/invites/{convite['token']}/accept", headers=headers(convidado)
+    ).status_code == 200
+
+    response = client.post(
+        f"/invites/{convite['token']}/reject", headers=headers(convidado)
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Você já participa deste Grupo."}
+
+
+def test_recusa_repetida_e_idempotente_sem_duplicar_notificacao(
+    contexto_convite,
+    monkeypatch,
+):
+    gestor, convidado, *_ = contexto_convite
+    grupo, convite = criar_grupo_e_convite(gestor)
+    delivery = RecordingEmailDelivery()
+    monkeypatch.setattr(events, "_reliable_email_service", lambda: delivery)
+    caminho = f"/invites/{convite['token']}/reject"
+
+    primeira = client.post(caminho, headers=headers(convidado))
+    segunda = client.post(caminho, headers=headers(convidado))
+
+    assert primeira.status_code == segunda.status_code == 200
+    db = SessionLocal()
+    try:
+        assert len(db.scalars(select(RecusaConvite).where(
+            RecusaConvite.usuario_id == convidado.id
+        )).all()) == 1
+        assert len(db.scalars(select(Notificacao).where(
+            Notificacao.tipo == "CONVITE_RECUSADO",
+            Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
+        )).all()) == 1
+        assert len(delivery.calls) == 1
+    finally:
+        db.close()
+
+
+def test_convite_recusado_nao_pode_ser_aceito(contexto_convite, monkeypatch):
+    gestor, convidado, *_ = contexto_convite
+    _, convite = criar_grupo_e_convite(gestor)
+    monkeypatch.setattr(
+        events, "_reliable_email_service", lambda: RecordingEmailDelivery()
+    )
+    assert client.post(
+        f"/invites/{convite['token']}/reject", headers=headers(convidado)
+    ).status_code == 200
+
+    response = client.post(
+        f"/invites/{convite['token']}/accept", headers=headers(convidado)
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Você já recusou este convite."}
+
+
+def test_recusa_inexistente_e_agora_nao_nao_persistem_estado(contexto_convite):
+    gestor, convidado, *_ = contexto_convite
+    _, convite = criar_grupo_e_convite(gestor)
+
+    assert client.get(f"/invites/{convite['token']}").status_code == 200
+    response = client.post(
+        "/invites/token-inexistente/reject", headers=headers(convidado)
+    )
+
+    assert response.status_code == 404
+    db = SessionLocal()
+    try:
+        assert db.scalar(select(RecusaConvite).where(
+            RecusaConvite.usuario_id == convidado.id
+        )) is None
+    finally:
+        db.close()
+
+
+def test_falha_de_email_nao_desfaz_recusa_ou_notificacao(
+    contexto_convite,
+    monkeypatch,
+):
+    gestor, convidado, *_ = contexto_convite
+    grupo, convite = criar_grupo_e_convite(gestor)
+    monkeypatch.setattr(
+        events,
+        "_reliable_email_service",
+        lambda: RecordingEmailDelivery(fail=True),
+    )
+
+    response = client.post(
+        f"/invites/{convite['token']}/reject", headers=headers(convidado)
+    )
+
+    assert response.status_code == 200
+    db = SessionLocal()
+    try:
+        assert db.scalar(select(RecusaConvite).where(
+            RecusaConvite.usuario_id == convidado.id
+        )) is not None
+        assert db.scalar(select(Notificacao).where(
+            Notificacao.usuario_id == gestor.id,
+            Notificacao.tipo == "CONVITE_RECUSADO",
+            Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
+        )) is not None
+    finally:
+        db.close()

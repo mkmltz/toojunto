@@ -1,6 +1,15 @@
 from datetime import datetime
 from decimal import Decimal
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
@@ -37,6 +46,25 @@ class Convite(Base):
         ForeignKey("grupos.id"), unique=True, index=True
     )
     token: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class RecusaConvite(Base):
+    __tablename__ = "recusas_convite"
+    __table_args__ = (
+        UniqueConstraint(
+            "convite_id",
+            "usuario_id",
+            name="uq_recusas_convite_convite_usuario",
+        ),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    convite_id: Mapped[int] = mapped_column(
+        ForeignKey("convites.id"), index=True
+    )
+    usuario_id: Mapped[int] = mapped_column(
+        ForeignKey("usuarios.id"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(30), default="RECUSADO")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class Participante(Base):

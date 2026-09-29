@@ -2,12 +2,17 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import Convite, Grupo, Participante, Usuario
+from ..models import Convite, Grupo, Participante, RecusaConvite, Usuario
 from ..notifications.events import (
     notificar_convite_aceito,
+    notificar_convite_recusado,
     notificar_grupo_completo,
 )
-from .schemas import AceiteConviteResposta, ConvitePublicoResposta
+from .schemas import (
+    AceiteConviteResposta,
+    ConvitePublicoResposta,
+    RecusaConviteResposta,
+)
 
 
 def _convite_indisponivel() -> HTTPException:
@@ -61,18 +66,19 @@ def aceitar_convite(
     usuario: Usuario,
     db: Session,
 ) -> AceiteConviteResposta:
-    grupo = db.scalar(
-        select(Grupo)
+    resultado = db.execute(
+        select(Grupo, Convite)
         .join(Convite, Convite.grupo_id == Grupo.id)
         .where(Convite.token == token)
         .with_for_update(of=Grupo)
-    )
-    if grupo is None:
+    ).first()
+    if resultado is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Convite não encontrado.",
         )
 
+    grupo, convite = resultado
     if grupo.status != "RASCUNHO":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -89,6 +95,18 @@ def aceitar_convite(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Você já participa deste Grupo.",
+        )
+
+    recusa_existente = db.scalar(
+        select(RecusaConvite).where(
+            RecusaConvite.convite_id == convite.id,
+            RecusaConvite.usuario_id == usuario.id,
+        )
+    )
+    if recusa_existente is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Você já recusou este convite.",
         )
 
     if _quantidade_associada(grupo.id, db) >= grupo.quantidade_participantes:
@@ -120,3 +138,68 @@ def aceitar_convite(
         participant_id=participante.id,
         status=participante.status,
     )
+
+
+def recusar_convite(
+    token: str,
+    usuario: Usuario,
+    db: Session,
+) -> RecusaConviteResposta:
+    resultado = db.execute(
+        select(Grupo, Convite)
+        .join(Convite, Convite.grupo_id == Grupo.id)
+        .where(Convite.token == token)
+        .with_for_update(of=Grupo)
+    ).first()
+    if resultado is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Convite não encontrado.",
+        )
+
+    grupo, convite = resultado
+    if grupo.status != "RASCUNHO":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Este Grupo não permite mais entradas.",
+        )
+
+    participacao_existente = db.scalar(
+        select(Participante).where(
+            Participante.grupo_id == grupo.id,
+            Participante.usuario_id == usuario.id,
+        )
+    )
+    if grupo.gestor_id == usuario.id or participacao_existente is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Você já participa deste Grupo.",
+        )
+
+    recusa_existente = db.scalar(
+        select(RecusaConvite).where(
+            RecusaConvite.convite_id == convite.id,
+            RecusaConvite.usuario_id == usuario.id,
+        )
+    )
+    if recusa_existente is not None:
+        return RecusaConviteResposta(
+            group_id=grupo.id,
+            status=recusa_existente.status,
+        )
+
+    recusa = RecusaConvite(
+        convite_id=convite.id,
+        usuario_id=usuario.id,
+        status="RECUSADO",
+    )
+    try:
+        db.add(recusa)
+        db.commit()
+        db.refresh(recusa)
+    except Exception:
+        db.rollback()
+        raise
+
+    notificar_convite_recusado(grupo, usuario, db)
+    return RecusaConviteResposta(group_id=grupo.id, status=recusa.status)

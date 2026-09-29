@@ -17,3 +17,8 @@ class AceiteConviteResposta(BaseModel):
     group_id: int
     participant_id: int
     status: str
+
+
+class RecusaConviteResposta(BaseModel):
+    group_id: int
+    status: str
