@@ -253,6 +253,39 @@ def test_usuario_autenticado_aceita_e_passa_a_visualizar_grupo(contexto_convite)
         db.close()
 
 
+def test_regressao_po_convite_valido_aceita_e_notifica_apos_us025(
+    contexto_convite,
+    monkeypatch,
+):
+    gestor, convidado, *_ = contexto_convite
+    grupo, convite = criar_grupo_e_convite(gestor, quantidade_participantes=5)
+    delivery = RecordingEmailDelivery()
+    monkeypatch.setattr(events, "_reliable_email_service", lambda: delivery)
+
+    response = client.post(
+        f"/invites/{convite['token']}/accept",
+        headers=headers(convidado),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["group_id"] == grupo["id"]
+    assert response.json()["status"] == "ATIVO"
+    db = SessionLocal()
+    try:
+        participante = db.get(Participante, response.json()["participant_id"])
+        assert participante is not None
+        assert participante.usuario_id == convidado.id
+        notificacoes = db.scalars(select(Notificacao).where(
+            Notificacao.usuario_id == gestor.id,
+            Notificacao.tipo == "CONVITE_ACEITO",
+            Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
+        )).all()
+        assert len(notificacoes) == 1
+        assert delivery.calls[0]["notificacao_id"] == notificacoes[0].id
+    finally:
+        db.close()
+
+
 def test_aceite_exige_autenticacao(contexto_convite):
     gestor, *_ = contexto_convite
     _, convite = criar_grupo_e_convite(gestor)
