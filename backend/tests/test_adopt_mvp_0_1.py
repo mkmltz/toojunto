@@ -8,8 +8,8 @@ from app import adopt_mvp_0_1
 def test_revision_graph_requires_single_head_descending_from_fixed_baseline():
     scripts = adopt_mvp_0_1._load_revision_graph()
 
-    assert scripts.get_heads() == ["c4a8e2f6b1d3"]
-    revisions = scripts.iterate_revisions("c4a8e2f6b1d3", "base")
+    assert scripts.get_heads() == ["e7d3a9c5f2b4"]
+    revisions = scripts.iterate_revisions("e7d3a9c5f2b4", "base")
     assert adopt_mvp_0_1.BASELINE_REVISION in {
         revision.revision for revision in revisions
     }

@@ -92,3 +92,23 @@ class Notificacao(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     lida_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     destinatario: Mapped[Usuario] = relationship(back_populates="notificacoes")
+    entregas_email: Mapped[list["EntregaEmail"]] = relationship(
+        back_populates="notificacao"
+    )
+
+class EntregaEmail(Base):
+    __tablename__ = "entregas_email"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    notificacao_id: Mapped[int | None] = mapped_column(
+        ForeignKey("notificacoes.id"), nullable=True, index=True
+    )
+    destinatario: Mapped[str] = mapped_column(String(255))
+    evento: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(30))
+    tentativas: Mapped[int] = mapped_column(Integer, default=1)
+    tentado_em: Mapped[datetime] = mapped_column(DateTime)
+    enviado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    erro: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    notificacao: Mapped[Notificacao | None] = relationship(
+        back_populates="entregas_email"
+    )
