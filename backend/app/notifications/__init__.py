@@ -1,4 +1,5 @@
 from .service import (
+    NotificationNotFoundError,
     NotificationRecipientNotFoundError,
     NotificationService,
     NotificationValidationError,
@@ -6,6 +7,7 @@ from .service import (
 
 
 __all__ = [
+    "NotificationNotFoundError",
     "NotificationRecipientNotFoundError",
     "NotificationService",
     "NotificationValidationError",

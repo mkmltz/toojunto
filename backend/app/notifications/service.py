@@ -1,4 +1,6 @@
-from sqlalchemy import select
+from datetime import datetime, timezone
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import Notificacao, Usuario
@@ -10,6 +12,10 @@ class NotificationValidationError(ValueError):
 
 class NotificationRecipientNotFoundError(LookupError):
     """Raised when the notification recipient does not exist."""
+
+
+class NotificationNotFoundError(LookupError):
+    """Raised when a notification is unavailable to the current user."""
 
 
 class NotificationService:
@@ -100,3 +106,44 @@ class NotificationService:
                 .order_by(Notificacao.created_at.desc(), Notificacao.id.desc())
             ).all()
         )
+
+    @staticmethod
+    def contar_notificacoes_nao_lidas(
+        usuario: Usuario,
+        db: Session,
+    ) -> int:
+        return db.scalar(
+            select(func.count(Notificacao.id)).where(
+                Notificacao.usuario_id == usuario.id,
+                Notificacao.status == "NAO_LIDA",
+            )
+        ) or 0
+
+    @staticmethod
+    def marcar_como_lida(
+        notificacao_id: int,
+        usuario: Usuario,
+        db: Session,
+    ) -> Notificacao:
+        notificacao = db.scalar(
+            select(Notificacao).where(
+                Notificacao.id == notificacao_id,
+                Notificacao.usuario_id == usuario.id,
+            )
+        )
+        if notificacao is None:
+            raise NotificationNotFoundError(
+                "Notification was not found for the current user"
+            )
+        if notificacao.status == "LIDA":
+            return notificacao
+
+        try:
+            notificacao.status = "LIDA"
+            notificacao.lida_em = datetime.now(timezone.utc).replace(tzinfo=None)
+            db.commit()
+            db.refresh(notificacao)
+            return notificacao
+        except Exception:
+            db.rollback()
+            raise

@@ -14,3 +14,7 @@ class NotificationResponse(BaseModel):
     status: str
     created_at: datetime
     lida_em: datetime | None
+
+
+class UnreadCountResponse(BaseModel):
+    count: int
