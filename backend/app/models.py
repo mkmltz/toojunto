@@ -4,6 +4,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, 
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
+
 class Usuario(Base):
     __tablename__ = "usuarios"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -12,6 +13,9 @@ class Usuario(Base):
     telefone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     senha_hash: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    notificacoes: Mapped[list["Notificacao"]] = relationship(
+        back_populates="destinatario"
+    )
 
 class Grupo(Base):
     __tablename__ = "grupos"
@@ -71,3 +75,20 @@ class Contemplacao(Base):
     valor: Mapped[float] = mapped_column(Numeric(12,2))
     status: Mapped[str] = mapped_column(String(30), default="REGISTRADA")
     data: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+class Notificacao(Base):
+    __tablename__ = "notificacoes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int] = mapped_column(
+        ForeignKey("usuarios.id"), index=True
+    )
+    tipo: Mapped[str] = mapped_column(String(80))
+    titulo: Mapped[str] = mapped_column(String(160))
+    mensagem: Mapped[str] = mapped_column(Text)
+    referencia_contextual: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(30), default="NAO_LIDA")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    lida_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    destinatario: Mapped[Usuario] = relationship(back_populates="notificacoes")

@@ -17,6 +17,15 @@ from .db import Base
 
 
 BASELINE_REVISION = "9b2f1c4d7e6a"
+BASELINE_TABLES = {
+    "ciclos",
+    "contemplacoes",
+    "convites",
+    "grupos",
+    "pagamentos",
+    "participantes",
+    "usuarios",
+}
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC_CONFIG = BACKEND_ROOT / "alembic.ini"
 
@@ -33,10 +42,14 @@ def _load_revision_graph() -> ScriptDirectory:
         raise AdoptionError(
             f"Revision {BASELINE_REVISION} is not the Alembic baseline"
         )
-    if scripts.get_heads() != [BASELINE_REVISION]:
-        raise AdoptionError(
-            f"Revision {BASELINE_REVISION} is not the single Alembic head"
-        )
+    heads = scripts.get_heads()
+    reachable_revisions = (
+        {revision.revision for revision in scripts.iterate_revisions(heads[0], "base")}
+        if len(heads) == 1
+        else set()
+    )
+    if BASELINE_REVISION not in reachable_revisions:
+        raise AdoptionError("Alembic history must have one head above the baseline")
     return scripts
 
 
@@ -50,7 +63,7 @@ def _validate_legacy_schema(connection: Connection) -> MigrationContext:
             "Database already has alembic_version; adoption was not performed"
         )
 
-    expected_tables = set(Base.metadata.tables)
+    expected_tables = BASELINE_TABLES
     actual_tables = set(inspector.get_table_names())
     if actual_tables != expected_tables:
         missing = sorted(expected_tables - actual_tables)
@@ -71,7 +84,12 @@ def _validate_legacy_schema(connection: Connection) -> MigrationContext:
 
     migration_context = MigrationContext.configure(
         connection,
-        opts={"compare_type": True},
+        opts={
+            "compare_type": True,
+            "include_object": lambda object_, name, type_, reflected, compare_to: (
+                type_ != "table" or name in BASELINE_TABLES
+            ),
+        },
     )
     differences = compare_metadata(migration_context, Base.metadata)
     if differences:
