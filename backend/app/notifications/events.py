@@ -1,3 +1,5 @@
+from datetime import date
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -49,6 +51,37 @@ def _notify_user(
         # Delivery persistence/provider failures must not undo either one.
         pass
     return notification
+
+
+def _notify_user_once(
+    *,
+    recipient: Usuario,
+    event: str,
+    title: str,
+    message: str,
+    reference: str,
+    action_label: str,
+    db: Session,
+) -> Notificacao:
+    existing = db.scalar(
+        select(Notificacao).where(
+            Notificacao.usuario_id == recipient.id,
+            Notificacao.tipo == event,
+            Notificacao.mensagem == message,
+            Notificacao.referencia_contextual == reference,
+        )
+    )
+    if existing is not None:
+        return existing
+    return _notify_user(
+        recipient=recipient,
+        event=event,
+        title=title,
+        message=message,
+        reference=reference,
+        action_label=action_label,
+        db=db,
+    )
 
 
 def notificar_convite_aceito(
@@ -160,6 +193,67 @@ def notificar_ciclo_iniciado(
         )
         for recipient in recipients
     ]
+
+
+def notificar_pagamento_vencendo(
+    grupo: Grupo,
+    numero_ciclo: int,
+    pagador: Usuario,
+    prazo: date,
+    db: Session,
+) -> Notificacao:
+    return _notify_user_once(
+        recipient=pagador,
+        event="PAGAMENTO_VENCENDO",
+        title="Pagamento próximo do prazo",
+        message=(
+            f"O pagamento do ciclo {numero_ciclo} do grupo {grupo.nome} "
+            f"vence em {prazo.strftime('%d/%m/%Y')}."
+        ),
+        reference=f"/groups/{grupo.id}",
+        action_label="Ver pagamento",
+        db=db,
+    )
+
+
+def notificar_pagamento_confirmado(
+    grupo: Grupo,
+    numero_ciclo: int,
+    pagador: Usuario,
+    db: Session,
+) -> Notificacao:
+    return _notify_user_once(
+        recipient=pagador,
+        event="PAGAMENTO_CONFIRMADO",
+        title="Pagamento confirmado",
+        message=(
+            f"Seu pagamento do ciclo {numero_ciclo} do grupo {grupo.nome} "
+            "foi confirmado."
+        ),
+        reference=f"/groups/{grupo.id}",
+        action_label="Ver grupo",
+        db=db,
+    )
+
+
+def notificar_pagamento_atrasado(
+    grupo: Grupo,
+    numero_ciclo: int,
+    pagador: Usuario,
+    db: Session,
+) -> Notificacao:
+    return _notify_user_once(
+        recipient=pagador,
+        event="PAGAMENTO_ATRASADO",
+        title="Pagamento atrasado",
+        message=(
+            f"O pagamento do ciclo {numero_ciclo} do grupo {grupo.nome} "
+            "está atrasado."
+        ),
+        reference=f"/groups/{grupo.id}",
+        action_label="Ver pagamento",
+        db=db,
+    )
 
 
 def notificar_grupo_cancelado(grupo: Grupo, db: Session) -> list[Notificacao]:

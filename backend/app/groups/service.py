@@ -6,10 +6,21 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..models import Ciclo, Convite, Grupo, Pagamento, Participante, Usuario
+from ..models import (
+    Ciclo,
+    Convite,
+    Grupo,
+    Notificacao,
+    Pagamento,
+    Participante,
+    Usuario,
+)
 from ..notifications.events import (
     notificar_ciclo_iniciado,
     notificar_grupo_cancelado,
+    notificar_pagamento_atrasado,
+    notificar_pagamento_confirmado,
+    notificar_pagamento_vencendo,
     notificar_sorteio_realizado,
 )
 from .schemas import (
@@ -405,6 +416,70 @@ def listar_obrigacoes_pagamento(
     return _obrigacoes_pagamento(grupo, integrantes, contemplado, recebedor, numero_ciclo, usuario, db)
 
 
+def notificar_pendencias_financeiras(
+    grupo_id: int,
+    numero_ciclo: int,
+    db: Session,
+) -> list[Notificacao]:
+    grupo = db.get(Grupo, grupo_id)
+    if grupo is None:
+        raise HTTPException(status_code=404, detail="Grupo não encontrado.")
+    integrantes = db.execute(
+        select(Participante, Usuario)
+        .join(Usuario, Usuario.id == Participante.usuario_id)
+        .where(
+            Participante.grupo_id == grupo_id,
+            Participante.status == "ATIVO",
+        )
+        .order_by(Participante.id)
+    ).all()
+    contemplados = [
+        (participante, usuario)
+        for participante, usuario in integrantes
+        if participante.ordem_sorteio == numero_ciclo
+    ]
+    if (
+        grupo.status != "ATIVO"
+        or numero_ciclo != _numero_ciclo_atual(grupo, db)
+        or len(contemplados) != 1
+        or len(integrantes) != grupo.quantidade_participantes
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Ciclo indisponível para pagamentos.",
+        )
+    contemplado, recebedor = contemplados[0]
+    obrigacoes = _obrigacoes_pagamento(
+        grupo,
+        integrantes,
+        contemplado,
+        recebedor,
+        numero_ciclo,
+        recebedor,
+        db,
+    )
+    usuarios = {usuario.id: usuario for _, usuario in integrantes}
+    notificacoes = []
+    for obrigacao in obrigacoes:
+        pagador = usuarios[obrigacao.pagador_usuario_id]
+        if obrigacao.alerta_prazo:
+            notificacoes.append(notificar_pagamento_vencendo(
+                grupo,
+                numero_ciclo,
+                pagador,
+                obrigacao.prazo_pagamento,
+                db,
+            ))
+        elif obrigacao.situacao == SituacaoObrigacao.ATRASADO:
+            notificacoes.append(notificar_pagamento_atrasado(
+                grupo,
+                numero_ciclo,
+                pagador,
+                db,
+            ))
+    return notificacoes
+
+
 def declarar_pagamento(
     grupo_id: int, numero_ciclo: int, usuario: Usuario, db: Session,
 ) -> ObrigacaoPagamentoResposta:
@@ -497,6 +572,18 @@ def avaliar_pagamento(
     except Exception:
         db.rollback()
         raise
+    if confirmar:
+        pagador_usuario = next(
+            integrante_usuario
+            for participante, integrante_usuario in integrantes
+            if participante.id == pagamento.pagador_id
+        )
+        notificar_pagamento_confirmado(
+            grupo,
+            numero_ciclo,
+            pagador_usuario,
+            db,
+        )
     if proximo_ciclo_iniciado is not None:
         notificar_ciclo_iniciado(grupo, proximo_ciclo_iniciado, db)
     return next(o for o in _obrigacoes_pagamento(

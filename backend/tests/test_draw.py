@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 from app.auth.security import criar_token_acesso, gerar_hash_senha
 from app.db import SessionLocal
 from app.email import EmailDeliveryPersistenceError, ReliableEmailService
+from app.groups.service import notificar_pendencias_financeiras
 from app.main import app
 from app.models import (
     Ciclo, Convite, EntregaEmail, Grupo, Notificacao, Pagamento,
@@ -435,6 +436,129 @@ def test_us011_prazo_alerta_e_atraso(contexto):
     declarada = client.get(caminho, headers=headers(pagador)).json()[0]
     assert declarada["situacao"] == "ATRASADO"
     assert declarada["status_registro"] == "AGUARDANDO_CONFIRMACAO"
+
+
+def test_eventos_de_vencimento_e_atraso_sao_idempotentes_e_isolados(
+    contexto,
+    monkeypatch,
+):
+    gestor, _, _, externo = contexto
+    grupo, _ = preparar_grupo(contexto)
+    assert client.post(
+        f"/groups/{grupo['id']}/draw", headers=headers(gestor)
+    ).status_code == 200
+    email_service = Mock()
+    monkeypatch.setattr(
+        events,
+        "_reliable_email_service",
+        lambda: ReliableEmailService(email_service),
+    )
+
+    db = SessionLocal()
+    try:
+        grupo_persistido = db.get(Grupo, grupo["id"])
+        grupo_persistido.data_inicio = date.today() + timedelta(days=10)
+        db.commit()
+        assert notificar_pendencias_financeiras(grupo["id"], 1, db) == []
+        assert db.scalar(select(Notificacao).where(
+            Notificacao.tipo == "PAGAMENTO_ATRASADO"
+        )) is None
+
+        grupo_persistido.data_inicio = date.today() + timedelta(days=5)
+        db.commit()
+        primeira = notificar_pendencias_financeiras(grupo["id"], 1, db)
+        repetida = notificar_pendencias_financeiras(grupo["id"], 1, db)
+        assert len(primeira) == len(repetida) == 2
+        lembretes = db.scalars(select(Notificacao).where(
+            Notificacao.tipo == "PAGAMENTO_VENCENDO",
+            Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
+        )).all()
+        assert {item.usuario_id for item in lembretes} == {
+            usuario.id for usuario in contexto[1:3]
+        }
+        assert externo.id not in {item.usuario_id for item in lembretes}
+        assert email_service.enviar_email.call_count == 2
+        entregas = db.scalars(select(EntregaEmail).where(
+            EntregaEmail.notificacao_id.in_([item.id for item in lembretes]),
+            EntregaEmail.evento == "PAGAMENTO_VENCENDO",
+        )).all()
+        assert len(entregas) == 2
+        assert all(entrega.status == "SUCESSO" for entrega in entregas)
+
+        grupo_persistido.data_inicio = date.today()
+        db.commit()
+        atrasadas = notificar_pendencias_financeiras(grupo["id"], 1, db)
+        assert len(atrasadas) == 2
+        notificacoes_atraso = db.scalars(select(Notificacao).where(
+            Notificacao.tipo == "PAGAMENTO_ATRASADO",
+            Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
+        )).all()
+        assert {item.usuario_id for item in notificacoes_atraso} == {
+            usuario.id for usuario in contexto[1:3]
+        }
+    finally:
+        db.close()
+
+
+def test_confirmacao_notifica_pagador_pos_commit_e_resiste_a_falha_email(
+    contexto,
+    monkeypatch,
+):
+    gestor, primeiro, segundo, externo = contexto
+    grupo, _ = preparar_grupo(contexto)
+    sorteio = client.post(
+        f"/groups/{grupo['id']}/draw", headers=headers(gestor)
+    ).json()
+    usuarios_por_nome = {
+        usuario.nome: usuario for usuario in (gestor, primeiro, segundo)
+    }
+    contemplado = usuarios_por_nome[sorteio["ordem_recebimento"][0]["nome"]]
+    caminho, obrigacoes = _pagamentos_do_ciclo(grupo["id"], 1, contexto)
+    obrigacao = obrigacoes[0]
+    pagador = usuarios_por_nome[obrigacao["pagador_nome"]]
+    failing_delivery = FailingEmailDelivery()
+    monkeypatch.setattr(
+        events,
+        "_reliable_email_service",
+        lambda: failing_delivery,
+    )
+    pagamento_id = client.post(
+        caminho, headers=headers(pagador)
+    ).json()["pagamento_id"]
+
+    db = SessionLocal()
+    try:
+        assert db.scalar(select(Notificacao).where(
+            Notificacao.tipo == "PAGAMENTO_CONFIRMADO",
+            Notificacao.usuario_id == pagador.id,
+        )) is None
+    finally:
+        db.close()
+
+    confirmar = f"{caminho}/{pagamento_id}/confirm"
+    response = client.post(confirmar, headers=headers(contemplado))
+    repetida = client.post(confirmar, headers=headers(contemplado))
+
+    assert response.status_code == 200
+    assert response.json()["status_registro"] == "CONFIRMADO"
+    assert repetida.status_code == 409
+    db = SessionLocal()
+    try:
+        pagamento = db.get(Pagamento, pagamento_id)
+        assert pagamento.status == "CONFIRMADO"
+        confirmacoes = db.scalars(select(Notificacao).where(
+            Notificacao.tipo == "PAGAMENTO_CONFIRMADO",
+            Notificacao.usuario_id == pagador.id,
+            Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
+        )).all()
+        assert len(confirmacoes) == 1
+        assert externo.id not in {item.usuario_id for item in confirmacoes}
+        assert any(
+            call["evento"] == "PAGAMENTO_CONFIRMADO"
+            for call in failing_delivery.calls
+        )
+    finally:
+        db.close()
 
 
 def test_us011_declaracoes_concorrentes_nao_duplicam(contexto):
