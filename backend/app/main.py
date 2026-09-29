@@ -9,6 +9,7 @@ from .config import Settings, settings
 from .db import engine
 from .groups.router import router as groups_router
 from .invites.router import router as invites_router
+from .notifications.router import router as notifications_router
 
 
 def create_app(app_settings: Settings = settings) -> FastAPI:
@@ -33,6 +34,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
     application.include_router(auth_router)
     application.include_router(groups_router)
     application.include_router(invites_router)
+    application.include_router(notifications_router)
 
     @application.get("/health")
     def health():

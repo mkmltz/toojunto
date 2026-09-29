@@ -87,3 +87,16 @@ class NotificationService:
         except Exception:
             db.rollback()
             raise
+
+    @staticmethod
+    def listar_notificacoes_do_usuario(
+        usuario: Usuario,
+        db: Session,
+    ) -> list[Notificacao]:
+        return list(
+            db.scalars(
+                select(Notificacao)
+                .where(Notificacao.usuario_id == usuario.id)
+                .order_by(Notificacao.created_at.desc(), Notificacao.id.desc())
+            ).all()
+        )
