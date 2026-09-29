@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import Ciclo, Convite, Grupo, Pagamento, Participante, Usuario
+from ..notifications.events import notificar_grupo_cancelado
 from .schemas import (
     ConviteResposta,
     GrupoAtualizacao,
@@ -615,6 +616,8 @@ def cancelar_grupo(
     except Exception:
         db.rollback()
         raise
+
+    notificar_grupo_cancelado(grupo, db)
 
     return grupo
 

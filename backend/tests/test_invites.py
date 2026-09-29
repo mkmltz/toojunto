@@ -12,7 +12,9 @@ from sqlalchemy import delete, select
 from app.auth.security import criar_token_acesso, gerar_hash_senha
 from app.db import SessionLocal
 from app.main import app
-from app.models import Convite, Grupo, Participante, Usuario
+from app.models import (
+    Convite, EntregaEmail, Grupo, Notificacao, Participante, Usuario,
+)
 from app.invites.service import aceitar_convite
 
 
@@ -39,6 +41,18 @@ def contexto_convite():
         yield usuarios
     finally:
         ids_usuarios = [usuario.id for usuario in usuarios]
+        ids_notificacoes = db.scalars(
+            select(Notificacao.id).where(
+                Notificacao.usuario_id.in_(ids_usuarios)
+            )
+        ).all()
+        if ids_notificacoes:
+            db.execute(delete(EntregaEmail).where(
+                EntregaEmail.notificacao_id.in_(ids_notificacoes)
+            ))
+            db.execute(delete(Notificacao).where(
+                Notificacao.id.in_(ids_notificacoes)
+            ))
         grupos = db.scalars(
             select(Grupo).where(Grupo.gestor_id.in_(ids_usuarios))
         ).all()

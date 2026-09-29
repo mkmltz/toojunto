@@ -3,6 +3,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import Convite, Grupo, Participante, Usuario
+from ..notifications.events import (
+    notificar_convite_aceito,
+    notificar_grupo_completo,
+)
 from .schemas import AceiteConviteResposta, ConvitePublicoResposta
 
 
@@ -106,6 +110,10 @@ def aceitar_convite(
     except Exception:
         db.rollback()
         raise
+
+    notificar_convite_aceito(grupo, usuario, db)
+    if _quantidade_associada(grupo.id, db) == grupo.quantidade_participantes:
+        notificar_grupo_completo(grupo, db)
 
     return AceiteConviteResposta(
         group_id=participante.grupo_id,

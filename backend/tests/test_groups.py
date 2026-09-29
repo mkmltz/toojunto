@@ -12,10 +12,23 @@ from app.db import SessionLocal
 from app.groups.schemas import GrupoAtualizacao, GrupoCriacao
 from app.groups.service import atualizar_grupo, cancelar_grupo, criar_grupo
 from app.main import app
-from app.models import Convite, Grupo, Participante, Usuario
+from app.models import (
+    Convite, EntregaEmail, Grupo, Notificacao, Participante, Usuario,
+)
 
 
 client = TestClient(app)
+
+
+def limpar_notificacoes(db, usuario_id: int) -> None:
+    ids = db.scalars(
+        select(Notificacao.id).where(Notificacao.usuario_id == usuario_id)
+    ).all()
+    if ids:
+        db.execute(delete(EntregaEmail).where(
+            EntregaEmail.notificacao_id.in_(ids)
+        ))
+        db.execute(delete(Notificacao).where(Notificacao.id.in_(ids)))
 
 
 @pytest.fixture
@@ -33,6 +46,7 @@ def usuario():
     try:
         yield novo_usuario
     finally:
+        limpar_notificacoes(db, novo_usuario.id)
         grupos = db.scalars(
             select(Grupo).where(Grupo.gestor_id == novo_usuario.id)
         ).all()
@@ -65,6 +79,7 @@ def outro_usuario():
     try:
         yield novo_usuario
     finally:
+        limpar_notificacoes(db, novo_usuario.id)
         grupos = db.scalars(
             select(Grupo).where(Grupo.gestor_id == novo_usuario.id)
         ).all()

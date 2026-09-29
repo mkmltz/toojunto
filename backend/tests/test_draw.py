@@ -10,7 +10,10 @@ from sqlalchemy import delete, select
 from app.auth.security import criar_token_acesso, gerar_hash_senha
 from app.db import SessionLocal
 from app.main import app
-from app.models import Ciclo, Convite, Grupo, Pagamento, Participante, Usuario
+from app.models import (
+    Ciclo, Convite, EntregaEmail, Grupo, Notificacao, Pagamento,
+    Participante, Usuario,
+)
 
 
 client = TestClient(app)
@@ -37,6 +40,16 @@ def contexto():
         yield usuarios
     finally:
         ids = [u.id for u in usuarios]
+        ids_notificacoes = db.scalars(
+            select(Notificacao.id).where(Notificacao.usuario_id.in_(ids))
+        ).all()
+        if ids_notificacoes:
+            db.execute(delete(EntregaEmail).where(
+                EntregaEmail.notificacao_id.in_(ids_notificacoes)
+            ))
+            db.execute(delete(Notificacao).where(
+                Notificacao.id.in_(ids_notificacoes)
+            ))
         grupos = db.scalars(select(Grupo).where(Grupo.gestor_id.in_(ids))).all()
         ids_grupos = [g.id for g in grupos]
         if ids_grupos:
