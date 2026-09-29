@@ -111,6 +111,57 @@ def notificar_grupo_completo(grupo: Grupo, db: Session) -> list[Notificacao]:
     return notifications
 
 
+def notificar_sorteio_realizado(
+    grupo: Grupo,
+    db: Session,
+) -> list[Notificacao]:
+    recipients = db.scalars(
+        select(Usuario)
+        .join(Participante, Participante.usuario_id == Usuario.id)
+        .where(Participante.grupo_id == grupo.id)
+        .order_by(Usuario.id)
+    ).all()
+    return [
+        _notify_user(
+            recipient=recipient,
+            event="SORTEIO_REALIZADO",
+            title="Sorteio realizado",
+            message=(
+                f"A ordem de recebimento do grupo {grupo.nome} foi definida."
+            ),
+            reference=f"/groups/{grupo.id}",
+            action_label="Ver grupo",
+            db=db,
+        )
+        for recipient in recipients
+    ]
+
+
+def notificar_ciclo_iniciado(
+    grupo: Grupo,
+    numero_ciclo: int,
+    db: Session,
+) -> list[Notificacao]:
+    recipients = db.scalars(
+        select(Usuario)
+        .join(Participante, Participante.usuario_id == Usuario.id)
+        .where(Participante.grupo_id == grupo.id)
+        .order_by(Usuario.id)
+    ).all()
+    return [
+        _notify_user(
+            recipient=recipient,
+            event="CICLO_INICIADO",
+            title="Novo ciclo iniciado",
+            message=f"O ciclo {numero_ciclo} do grupo {grupo.nome} foi iniciado.",
+            reference=f"/groups/{grupo.id}",
+            action_label="Ver grupo",
+            db=db,
+        )
+        for recipient in recipients
+    ]
+
+
 def notificar_grupo_cancelado(grupo: Grupo, db: Session) -> list[Notificacao]:
     recipients = db.scalars(
         select(Usuario)

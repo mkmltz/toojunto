@@ -7,7 +7,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import Ciclo, Convite, Grupo, Pagamento, Participante, Usuario
-from ..notifications.events import notificar_grupo_cancelado
+from ..notifications.events import (
+    notificar_ciclo_iniciado,
+    notificar_grupo_cancelado,
+    notificar_sorteio_realizado,
+)
 from .schemas import (
     ConviteResposta,
     GrupoAtualizacao,
@@ -466,6 +470,7 @@ def avaliar_pagamento(
     if pagamento.status != "AGUARDANDO_CONFIRMACAO":
         raise HTTPException(status_code=409, detail="Pagamento não aguarda confirmação.")
 
+    proximo_ciclo_iniciado = None
     try:
         pagamento.status = "CONFIRMADO" if confirmar else "REJEITADO"
         db.flush()
@@ -485,12 +490,15 @@ def avaliar_pagamento(
                         data=grupo.data_inicio + timedelta(days=(proximo_numero - 1) * 30),
                         contemplado_id=proximo_contemplado.id, status="ABERTO",
                     ))
+                    proximo_ciclo_iniciado = proximo_numero
                 else:
                     grupo.status = "ENCERRADO"
         db.commit()
     except Exception:
         db.rollback()
         raise
+    if proximo_ciclo_iniciado is not None:
+        notificar_ciclo_iniciado(grupo, proximo_ciclo_iniciado, db)
     return next(o for o in _obrigacoes_pagamento(
         grupo, integrantes, contemplado, recebedor, numero_ciclo, usuario, db
     ) if o.pagamento_id == pagamento_id)
@@ -723,6 +731,8 @@ def realizar_sorteio(grupo_id: int, gestor: Usuario, db: Session) -> Grupo:
     except Exception:
         db.rollback()
         raise
+    notificar_sorteio_realizado(grupo, db)
+    notificar_ciclo_iniciado(grupo, 1, db)
     return grupo
 
 

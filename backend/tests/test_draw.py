@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from threading import Barrier
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -9,14 +10,25 @@ from sqlalchemy import delete, select
 
 from app.auth.security import criar_token_acesso, gerar_hash_senha
 from app.db import SessionLocal
+from app.email import EmailDeliveryPersistenceError, ReliableEmailService
 from app.main import app
 from app.models import (
     Ciclo, Convite, EntregaEmail, Grupo, Notificacao, Pagamento,
     Participante, Usuario,
 )
+from app.notifications import events
 
 
 client = TestClient(app)
+
+
+class FailingEmailDelivery:
+    def __init__(self):
+        self.calls = []
+
+    def enviar_e_registrar(self, **data):
+        self.calls.append(data)
+        raise EmailDeliveryPersistenceError("falha isolada de teste")
 
 
 def headers(usuario):
@@ -205,6 +217,134 @@ def test_sorteios_concorrentes_tem_um_unico_vencedor(contexto):
     assert sorted(resultados) == [200, 409]
     ordem = client.get(f"/groups/{grupo['id']}", headers=headers(gestor)).json()["ordem_recebimento"]
     assert [item["posicao"] for item in ordem] == [1, 2, 3]
+
+
+def test_sorteio_notifica_integrantes_sem_externo_e_registra_entregas(
+    contexto,
+    monkeypatch,
+):
+    gestor, _, _, externo = contexto
+    grupo, _ = preparar_grupo(contexto)
+    email_service = Mock()
+    monkeypatch.setattr(
+        events,
+        "_reliable_email_service",
+        lambda: ReliableEmailService(email_service),
+    )
+
+    response = client.post(
+        f"/groups/{grupo['id']}/draw", headers=headers(gestor)
+    )
+    ordem = response.json()["ordem_recebimento"]
+    repeticao = client.post(
+        f"/groups/{grupo['id']}/draw", headers=headers(gestor)
+    )
+
+    assert response.status_code == 200
+    assert repeticao.status_code == 409
+    assert client.get(
+        f"/groups/{grupo['id']}", headers=headers(gestor)
+    ).json()["ordem_recebimento"] == ordem
+    db = SessionLocal()
+    try:
+        for evento in ("SORTEIO_REALIZADO", "CICLO_INICIADO"):
+            notificacoes = db.scalars(select(Notificacao).where(
+                Notificacao.tipo == evento,
+                Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
+            )).all()
+            assert {item.usuario_id for item in notificacoes} == {
+                usuario.id for usuario in contexto[:3]
+            }
+            assert externo.id not in {item.usuario_id for item in notificacoes}
+            entregas = db.scalars(select(EntregaEmail).where(
+                EntregaEmail.notificacao_id.in_(
+                    [item.id for item in notificacoes]
+                ),
+                EntregaEmail.evento == evento,
+            )).all()
+            assert len(entregas) == 3
+            assert all(entrega.status == "SUCESSO" for entrega in entregas)
+    finally:
+        db.close()
+    assert email_service.enviar_email.call_count == 6
+
+
+def test_falha_de_email_preserva_sorteio_e_inicio_do_proximo_ciclo(
+    contexto,
+    monkeypatch,
+):
+    gestor, primeiro, segundo, externo = contexto
+    grupo, _ = preparar_grupo(contexto)
+    failing_delivery = FailingEmailDelivery()
+    monkeypatch.setattr(
+        events,
+        "_reliable_email_service",
+        lambda: failing_delivery,
+    )
+
+    sorteio = client.post(
+        f"/groups/{grupo['id']}/draw", headers=headers(gestor)
+    )
+    assert sorteio.status_code == 200
+    ordem = sorteio.json()["ordem_recebimento"]
+    usuarios_por_nome = {
+        usuario.nome: usuario for usuario in (gestor, primeiro, segundo)
+    }
+    contemplado = usuarios_por_nome[ordem[0]["nome"]]
+    caminho, obrigacoes = _pagamentos_do_ciclo(grupo["id"], 1, contexto)
+    for indice, obrigacao in enumerate(obrigacoes):
+        pagador = usuarios_por_nome[obrigacao["pagador_nome"]]
+        pagamento_id = client.post(
+            caminho, headers=headers(pagador)
+        ).json()["pagamento_id"]
+        assert client.post(
+            f"{caminho}/{pagamento_id}/confirm",
+            headers=headers(contemplado),
+        ).status_code == 200
+        if indice == 0:
+            db = SessionLocal()
+            try:
+                assert db.scalar(select(Notificacao).where(
+                    Notificacao.tipo == "CICLO_INICIADO",
+                    Notificacao.referencia_contextual
+                    == f"/groups/{grupo['id']}",
+                    Notificacao.mensagem.contains("ciclo 2"),
+                )) is None
+            finally:
+                db.close()
+
+    db = SessionLocal()
+    try:
+        participantes = db.scalars(select(Participante).where(
+            Participante.grupo_id == grupo["id"]
+        )).all()
+        assert sorted(item.ordem_sorteio for item in participantes) == [1, 2, 3]
+        ciclo_dois = db.scalar(select(Ciclo).where(
+            Ciclo.grupo_id == grupo["id"], Ciclo.numero == 2
+        ))
+        assert ciclo_dois is not None
+        assert ciclo_dois.status == "ABERTO"
+        notificacoes_ciclo_dois = db.scalars(select(Notificacao).where(
+            Notificacao.tipo == "CICLO_INICIADO",
+            Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
+            Notificacao.mensagem.contains("ciclo 2"),
+        )).all()
+        assert {item.usuario_id for item in notificacoes_ciclo_dois} == {
+            usuario.id for usuario in contexto[:3]
+        }
+        assert externo.id not in {
+            item.usuario_id for item in notificacoes_ciclo_dois
+        }
+        assert any(
+            call["evento"] == "SORTEIO_REALIZADO"
+            for call in failing_delivery.calls
+        )
+        assert any(
+            call["evento"] == "CICLO_INICIADO"
+            for call in failing_delivery.calls
+        )
+    finally:
+        db.close()
 
 
 def test_us011_obrigacoes_autorizacao_e_declaracao(contexto):
