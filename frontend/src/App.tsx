@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AuthLayout } from "./components/AuthLayout";
+import { NotificationNavigationProvider } from "./components/AppShell";
 import { CreateGroupPage } from "./pages/CreateGroupPage";
 import { EditGroupPage } from "./pages/EditGroupPage";
 import { GroupCreatedPage } from "./pages/GroupCreatedPage";
@@ -7,17 +8,20 @@ import { GroupDetailsPage } from "./pages/GroupDetailsPage";
 import { HomePage } from "./pages/HomePage";
 import { InvitePage } from "./pages/InvitePage";
 import { LoginPage } from "./pages/LoginPage";
+import { NotificationsPage } from "./pages/NotificationsPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ApiError, buscarUsuarioAtual, cadastrarUsuario, fazerLogin } from "./services/auth";
 import { atualizarGrupo, buscarGrupo, cancelarGrupo, criarGrupo, gerarOuObterConvite, listarGrupos, prepararSorteio, realizarSorteio } from "./services/groups";
 import { aceitarConvite, consultarConvite } from "./services/invites";
+import { contarNotificacoesNaoLidas, listarNotificacoes, marcarNotificacaoComoLida } from "./services/notifications";
 import type { Usuario } from "./types/auth";
 import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoCriacaoDados, GrupoDetalhe, GrupoLista } from "./types/groups";
 import type { AceiteConvite, ConvitePublico } from "./types/invites";
+import type { NotificationItem } from "./types/notifications";
 
 const CHAVE_TOKEN = "toojunto_access_token";
 const CHAVE_GRUPO = "toojunto_selected_group_id";
-type Tela = "login" | "cadastro" | "home" | "criar-grupo" | "grupo-criado" | "detalhes" | "editar-grupo" | "convite";
+type Tela = "login" | "cadastro" | "home" | "criar-grupo" | "grupo-criado" | "detalhes" | "editar-grupo" | "convite" | "notificacoes";
 
 function extrairTokenConvite(pathname: string): string | null {
   const correspondencia = pathname.match(/^\/invites\/([^/]+)\/?$/);
@@ -73,6 +77,11 @@ export default function App() {
   const [erroConvite, setErroConvite] = useState("");
   const [conviteIndisponivel, setConviteIndisponivel] = useState(false);
   const [tentativaConvite, setTentativaConvite] = useState(0);
+  const [quantidadeNaoLidas, setQuantidadeNaoLidas] = useState(0);
+  const [notificacoes, setNotificacoes] = useState<NotificationItem[]>([]);
+  const [carregandoNotificacoes, setCarregandoNotificacoes] = useState(false);
+  const [lendoNotificacaoId, setLendoNotificacaoId] = useState<number | null>(null);
+  const [erroNotificacoes, setErroNotificacoes] = useState("");
 
   function encerrarSessao(mensagem: string) {
     localStorage.removeItem(CHAVE_TOKEN);
@@ -81,6 +90,8 @@ export default function App() {
     setGrupos([]);
     setGrupoSelecionado(null);
     setGrupoCriado(null);
+    setQuantidadeNaoLidas(0);
+    setNotificacoes([]);
     setTela("login");
     setAviso(mensagem);
   }
@@ -171,6 +182,21 @@ export default function App() {
     if (usuario && tela === "home") carregarGrupos();
   }, [usuario, tela]);
 
+  useEffect(() => {
+    if (!usuario || tela === "convite") return;
+    const token = localStorage.getItem(CHAVE_TOKEN);
+    if (!token) return;
+    let ativo = true;
+    contarNotificacoesNaoLidas(token)
+      .then(({ count }) => { if (ativo) setQuantidadeNaoLidas(count); })
+      .catch((error) => {
+        if (ativo && error instanceof ApiError && error.status === 401) {
+          encerrarSessao("Sua sessão terminou. Entre novamente para continuar.");
+        }
+      });
+    return () => { ativo = false; };
+  }, [usuario]);
+
   async function carregarGrupos() {
     const token = localStorage.getItem(CHAVE_TOKEN);
     if (!token) { encerrarSessao("Entre novamente para ver seus grupos."); return; }
@@ -181,6 +207,71 @@ export default function App() {
       if (error instanceof ApiError && error.status === 401) { encerrarSessao("Sua sessão terminou. Entre novamente para continuar."); return; }
       setErroLista("Não foi possível carregar seus grupos.");
     } finally { setCarregandoLista(false); }
+  }
+
+  async function carregarNotificacoes() {
+    const token = localStorage.getItem(CHAVE_TOKEN);
+    if (!token) {
+      encerrarSessao("Entre novamente para ver suas notificações.");
+      return;
+    }
+    setCarregandoNotificacoes(true);
+    setErroNotificacoes("");
+    try {
+      setNotificacoes(await listarNotificacoes(token));
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        encerrarSessao("Sua sessão terminou. Entre novamente para continuar.");
+        return;
+      }
+      setErroNotificacoes("Não foi possível carregar suas notificações.");
+    } finally {
+      setCarregandoNotificacoes(false);
+    }
+  }
+
+  function abrirNotificacoes() {
+    setTela("notificacoes");
+    void carregarNotificacoes();
+  }
+
+  async function navegarParaReferencia(reference: string | null) {
+    if (!reference) return;
+    const groupMatch = reference.match(/^\/groups\/(\d+)\/?$/);
+    if (!groupMatch) return;
+    if (await abrirGrupo(Number(groupMatch[1]))) {
+      window.history.pushState({}, "", reference);
+    }
+  }
+
+  async function selecionarNotificacao(notification: NotificationItem) {
+    if (notification.status === "LIDA") {
+      await navegarParaReferencia(notification.referencia_contextual);
+      return;
+    }
+    const token = localStorage.getItem(CHAVE_TOKEN);
+    if (!token) {
+      encerrarSessao("Entre novamente para ver suas notificações.");
+      return;
+    }
+    setLendoNotificacaoId(notification.id);
+    setErroNotificacoes("");
+    try {
+      const atualizada = await marcarNotificacaoComoLida(notification.id, token);
+      setNotificacoes((atuais) => atuais.map((item) => (
+        item.id === atualizada.id ? atualizada : item
+      )));
+      setQuantidadeNaoLidas((count) => Math.max(0, count - 1));
+      await navegarParaReferencia(atualizada.referencia_contextual);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        encerrarSessao("Sua sessão terminou. Entre novamente para continuar.");
+        return;
+      }
+      setErroNotificacoes("Não foi possível marcar a notificação como lida.");
+    } finally {
+      setLendoNotificacaoId(null);
+    }
   }
 
   async function entrar(email: string, senha: string) {
@@ -223,7 +314,7 @@ export default function App() {
 
   async function abrirGrupo(grupoId: number) {
     const token = localStorage.getItem(CHAVE_TOKEN);
-    if (!token) { encerrarSessao("Entre novamente para abrir o grupo."); return; }
+    if (!token) { encerrarSessao("Entre novamente para abrir o grupo."); return false; }
     setCarregandoLista(true);
     setErroLista("");
     try {
@@ -232,9 +323,11 @@ export default function App() {
       localStorage.setItem(CHAVE_GRUPO, String(grupo.id));
       setAvisoGrupo("");
       setTela("detalhes");
+      return true;
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) { encerrarSessao("Sua sessão terminou. Entre novamente para continuar."); return; }
+      if (error instanceof ApiError && error.status === 401) { encerrarSessao("Sua sessão terminou. Entre novamente para continuar."); return false; }
       setErroLista(mensagemDeErroGrupo(error));
+      return false;
     } finally { setCarregandoLista(false); }
   }
 
@@ -413,12 +506,20 @@ export default function App() {
 
   function sair() { encerrarSessao("Você saiu da sua conta."); }
 
+  function areaAutenticada(content: ReactNode) {
+    return <NotificationNavigationProvider value={{
+      unreadCount: quantidadeNaoLidas,
+      onOpenNotifications: abrirNotificacoes,
+    }}>{content}</NotificationNavigationProvider>;
+  }
+
   if (carregandoSessao) return <main className="loading-screen">Carregando TooJunto...</main>;
   if (tela === "convite" && conviteToken) return <InvitePage convite={convitePublico} aceite={aceiteConvite} carregando={carregandoConvite} aceitando={aceitandoConvite} erro={erroConvite} autenticado={Boolean(usuario)} indisponivel={conviteIndisponivel} onEntrar={entrarNoGrupoPeloConvite} onAgoraNao={abandonarConvite} onCriarConta={() => setTela("cadastro")} onTentarNovamente={() => setTentativaConvite((tentativa) => tentativa + 1)} onVerGrupo={verGrupoAceito} />;
-  if (usuario && tela === "criar-grupo") return <CreateGroupPage nomeUsuario={usuario.nome} carregando={enviando} onVoltar={voltarParaHome} onCriar={cadastrarGrupo} />;
-  if (usuario && tela === "grupo-criado" && grupoCriado) return <GroupCreatedPage nomeUsuario={usuario.nome} grupo={grupoCriado} onVoltar={voltarParaHome} onVerGrupo={() => abrirGrupo(grupoCriado.id)} />;
-  if (usuario && tela === "editar-grupo" && grupoSelecionado) return <EditGroupPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} carregando={enviando} onVoltar={() => setTela("detalhes")} onSalvar={atualizarGrupoSelecionado} />;
-  if (usuario && tela === "detalhes" && grupoSelecionado) return <GroupDetailsPage nomeUsuario={usuario.nome} usuarioId={usuario.id} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarParaHome} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} onObterConvite={obterConviteSelecionado} onPrepararSorteio={prepararSorteioSelecionado} onRealizarSorteio={realizarSorteioSelecionado} />;
-  if (usuario) return <HomePage usuario={usuario} grupos={grupos} carregando={carregandoLista} erro={erroLista || avisoGrupo} onAbrirGrupo={abrirGrupo} onCriarGrupo={() => setTela("criar-grupo")} onRecarregar={carregarGrupos} onSair={sair} />;
+  if (usuario && tela === "notificacoes") return areaAutenticada(<NotificationsPage nomeUsuario={usuario.nome} notificacoes={notificacoes} carregando={carregandoNotificacoes} lendoId={lendoNotificacaoId} erro={erroNotificacoes} onVoltar={voltarParaHome} onTentarNovamente={carregarNotificacoes} onSelecionar={selecionarNotificacao} />);
+  if (usuario && tela === "criar-grupo") return areaAutenticada(<CreateGroupPage nomeUsuario={usuario.nome} carregando={enviando} onVoltar={voltarParaHome} onCriar={cadastrarGrupo} />);
+  if (usuario && tela === "grupo-criado" && grupoCriado) return areaAutenticada(<GroupCreatedPage nomeUsuario={usuario.nome} grupo={grupoCriado} onVoltar={voltarParaHome} onVerGrupo={() => abrirGrupo(grupoCriado.id)} />);
+  if (usuario && tela === "editar-grupo" && grupoSelecionado) return areaAutenticada(<EditGroupPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} carregando={enviando} onVoltar={() => setTela("detalhes")} onSalvar={atualizarGrupoSelecionado} />);
+  if (usuario && tela === "detalhes" && grupoSelecionado) return areaAutenticada(<GroupDetailsPage nomeUsuario={usuario.nome} usuarioId={usuario.id} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarParaHome} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} onObterConvite={obterConviteSelecionado} onPrepararSorteio={prepararSorteioSelecionado} onRealizarSorteio={realizarSorteioSelecionado} />);
+  if (usuario) return areaAutenticada(<HomePage usuario={usuario} grupos={grupos} carregando={carregandoLista} erro={erroLista || avisoGrupo} onAbrirGrupo={abrirGrupo} onCriarGrupo={() => setTela("criar-grupo")} onRecarregar={carregarGrupos} onSair={sair} />);
   return <AuthLayout>{tela === "login" ? <LoginPage aviso={aviso} carregando={enviando} onEntrar={entrar} onCadastrar={() => { setAviso(""); setTela("cadastro"); }} onVoltarConvite={conviteToken ? () => setTela("convite") : undefined} /> : <RegisterPage carregando={enviando} onVoltar={() => setTela("login")} onCadastrar={cadastrar} />}</AuthLayout>;
 }

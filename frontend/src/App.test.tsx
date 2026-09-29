@@ -108,7 +108,7 @@ describe("US-003.1 e US-004", () => {
     vi.mocked(fetch).mockResolvedValueOnce(resposta(usuario)).mockResolvedValueOnce(resposta(grupo()));
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Grupo dos Amigos" })).toBeInTheDocument();
-    expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups/1", expect.anything());
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1", expect.anything());
   });
 
   it("participante visualiza sem ações de gestão", async () => {
@@ -150,7 +150,7 @@ describe("US-003.1 e US-004", () => {
     await abrirDetalhes();
     fireEvent.click(screen.getByRole("button", { name: "Cancelar grupo" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("não será excluído");
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(4);
     fireEvent.click(screen.getByRole("button", { name: "Voltar" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
