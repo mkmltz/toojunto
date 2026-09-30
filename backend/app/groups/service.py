@@ -20,6 +20,7 @@ from ..notifications.events import (
     notificar_grupo_cancelado,
     notificar_pagamento_atrasado,
     notificar_pagamento_confirmado,
+    notificar_pagamento_informado,
     notificar_pagamento_vencendo,
     notificar_sorteio_realizado,
 )
@@ -517,6 +518,7 @@ def declarar_pagamento(
     except Exception:
         db.rollback()
         raise
+    notificar_pagamento_informado(grupo, numero_ciclo, recebedor, db)
     return next(o for o in _obrigacoes_pagamento(
         grupo, integrantes, contemplado, recebedor, numero_ciclo, usuario, db
     ) if o.pagador_id == pagador.id)

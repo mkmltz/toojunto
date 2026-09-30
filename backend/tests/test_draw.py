@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 from app.auth.security import criar_token_acesso, gerar_hash_senha
 from app.db import SessionLocal
 from app.email import EmailDeliveryPersistenceError, ReliableEmailService
+from app.groups import service as groups_service
 from app.jobs import financial_notifications
 from app.main import app
 from app.models import (
@@ -438,6 +439,134 @@ def test_us011_prazo_alerta_e_atraso(contexto):
     assert declarada["status_registro"] == "AGUARDANDO_CONFIRMACAO"
 
 
+def test_declaracao_notifica_so_contemplado_pos_commit_com_email_associado(
+    contexto,
+    monkeypatch,
+):
+    gestor, primeiro, segundo, externo = contexto
+    grupo, _ = preparar_grupo(contexto)
+    sorteio = client.post(
+        f"/groups/{grupo['id']}/draw", headers=headers(gestor)
+    ).json()
+    usuarios_por_nome = {
+        usuario.nome: usuario for usuario in (gestor, primeiro, segundo)
+    }
+    contemplado = usuarios_por_nome[sorteio["ordem_recebimento"][0]["nome"]]
+    caminho, obrigacoes = _pagamentos_do_ciclo(grupo["id"], 1, contexto)
+    pagador = usuarios_por_nome[obrigacoes[0]["pagador_nome"]]
+    email_service = Mock()
+    monkeypatch.setattr(
+        events,
+        "_reliable_email_service",
+        lambda: ReliableEmailService(email_service),
+    )
+    evento_original = groups_service.notificar_pagamento_informado
+    observado = {}
+
+    def notificar_apos_commit(grupo_evento, numero_ciclo, destinatario, db):
+        verificacao = SessionLocal()
+        try:
+            pagamento = verificacao.scalar(
+                select(Pagamento).join(Ciclo).where(
+                    Ciclo.grupo_id == grupo_evento.id,
+                    Ciclo.numero == numero_ciclo,
+                    Pagamento.status == "AGUARDANDO_CONFIRMACAO",
+                )
+            )
+            observado["pagamento_id"] = pagamento.id if pagamento else None
+        finally:
+            verificacao.close()
+        return evento_original(grupo_evento, numero_ciclo, destinatario, db)
+
+    monkeypatch.setattr(
+        groups_service,
+        "notificar_pagamento_informado",
+        notificar_apos_commit,
+    )
+
+    resposta = client.post(caminho, headers=headers(pagador))
+    repetida = client.post(caminho, headers=headers(pagador))
+    assert resposta.status_code == 201
+    assert repetida.status_code == 409
+    assert observado["pagamento_id"] == resposta.json()["pagamento_id"]
+
+    db = SessionLocal()
+    try:
+        notificacoes = db.scalars(select(Notificacao).where(
+            Notificacao.tipo == "PAGAMENTO_INFORMADO",
+            Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
+        )).all()
+        assert len(notificacoes) == 1
+        assert notificacoes[0].usuario_id == contemplado.id
+        assert notificacoes[0].usuario_id not in {
+            pagador.id,
+            externo.id,
+            *(usuario.id for usuario in (gestor, primeiro, segundo)
+              if usuario.id != contemplado.id),
+        }
+        assert notificacoes[0].titulo == "Pagamento informado"
+        assert notificacoes[0].mensagem == (
+            "Um participante informou um pagamento do ciclo atual. "
+            "Confirme ou rejeite o recebimento."
+        )
+        entregas = db.scalars(select(EntregaEmail).where(
+            EntregaEmail.notificacao_id == notificacoes[0].id,
+            EntregaEmail.evento == "PAGAMENTO_INFORMADO",
+        )).all()
+        assert len(entregas) == 1
+        assert entregas[0].status == "SUCESSO"
+        assert email_service.enviar_email.call_args.kwargs["action_path"] == (
+            f"/groups/{grupo['id']}"
+        )
+        assert email_service.enviar_email.call_args.kwargs["action_label"] == (
+            "Ver pagamentos"
+        )
+    finally:
+        db.close()
+
+
+def test_falha_email_nao_desfaz_pagamento_informado_ou_notificacao(
+    contexto,
+    monkeypatch,
+):
+    gestor, primeiro, segundo, _ = contexto
+    grupo, _ = preparar_grupo(contexto)
+    sorteio = client.post(
+        f"/groups/{grupo['id']}/draw", headers=headers(gestor)
+    ).json()
+    usuarios_por_nome = {
+        usuario.nome: usuario for usuario in (gestor, primeiro, segundo)
+    }
+    contemplado = usuarios_por_nome[sorteio["ordem_recebimento"][0]["nome"]]
+    caminho, obrigacoes = _pagamentos_do_ciclo(grupo["id"], 1, contexto)
+    pagador = usuarios_por_nome[obrigacoes[0]["pagador_nome"]]
+    failing_delivery = FailingEmailDelivery()
+    monkeypatch.setattr(
+        events,
+        "_reliable_email_service",
+        lambda: failing_delivery,
+    )
+
+    resposta = client.post(caminho, headers=headers(pagador))
+    assert resposta.status_code == 201
+
+    db = SessionLocal()
+    try:
+        assert db.get(Pagamento, resposta.json()["pagamento_id"]).status == (
+            "AGUARDANDO_CONFIRMACAO"
+        )
+        notificacoes = db.scalars(select(Notificacao).where(
+            Notificacao.tipo == "PAGAMENTO_INFORMADO",
+            Notificacao.usuario_id == contemplado.id,
+            Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
+        )).all()
+        assert len(notificacoes) == 1
+        assert failing_delivery.calls[0]["notificacao_id"] == notificacoes[0].id
+        assert failing_delivery.calls[0]["evento"] == "PAGAMENTO_INFORMADO"
+    finally:
+        db.close()
+
+
 def test_eventos_de_vencimento_e_atraso_sao_idempotentes_e_isolados(
     contexto,
     monkeypatch,
@@ -467,7 +596,8 @@ def test_eventos_de_vencimento_e_atraso_sao_idempotentes_e_isolados(
         resultado = financial_notifications.run_financial_notification_job()
         assert resultado.groups_processed == 1
         assert db.scalar(select(Notificacao).where(
-            Notificacao.tipo == "PAGAMENTO_ATRASADO"
+            Notificacao.tipo == "PAGAMENTO_ATRASADO",
+            Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
         )) is None
 
         grupo_persistido.data_inicio = date.today() + timedelta(days=5)

@@ -236,6 +236,26 @@ def notificar_pagamento_confirmado(
     )
 
 
+def notificar_pagamento_informado(
+    grupo: Grupo,
+    numero_ciclo: int,
+    contemplado: Usuario,
+    db: Session,
+) -> Notificacao:
+    return _notify_user(
+        recipient=contemplado,
+        event="PAGAMENTO_INFORMADO",
+        title="Pagamento informado",
+        message=(
+            "Um participante informou um pagamento do ciclo atual. "
+            "Confirme ou rejeite o recebimento."
+        ),
+        reference=f"/groups/{grupo.id}",
+        action_label="Ver pagamentos",
+        db=db,
+    )
+
+
 def notificar_pagamento_atrasado(
     grupo: Grupo,
     numero_ciclo: int,
