@@ -11,7 +11,7 @@ from sqlalchemy import delete, select
 from app.auth.security import criar_token_acesso, gerar_hash_senha
 from app.db import SessionLocal
 from app.email import EmailDeliveryPersistenceError, ReliableEmailService
-from app.groups.service import notificar_pendencias_financeiras
+from app.jobs import financial_notifications
 from app.main import app
 from app.models import (
     Ciclo, Convite, EntregaEmail, Grupo, Notificacao, Pagamento,
@@ -453,22 +453,28 @@ def test_eventos_de_vencimento_e_atraso_sao_idempotentes_e_isolados(
         "_reliable_email_service",
         lambda: ReliableEmailService(email_service),
     )
+    monkeypatch.setattr(
+        financial_notifications,
+        "_active_groups",
+        lambda job_db: [job_db.get(Grupo, grupo["id"])],
+    )
 
     db = SessionLocal()
     try:
         grupo_persistido = db.get(Grupo, grupo["id"])
         grupo_persistido.data_inicio = date.today() + timedelta(days=10)
         db.commit()
-        assert notificar_pendencias_financeiras(grupo["id"], 1, db) == []
+        resultado = financial_notifications.run_financial_notification_job()
+        assert resultado.groups_processed == 1
         assert db.scalar(select(Notificacao).where(
             Notificacao.tipo == "PAGAMENTO_ATRASADO"
         )) is None
 
         grupo_persistido.data_inicio = date.today() + timedelta(days=5)
         db.commit()
-        primeira = notificar_pendencias_financeiras(grupo["id"], 1, db)
-        repetida = notificar_pendencias_financeiras(grupo["id"], 1, db)
-        assert len(primeira) == len(repetida) == 2
+        primeira = financial_notifications.run_financial_notification_job()
+        repetida = financial_notifications.run_financial_notification_job()
+        assert primeira.groups_processed == repetida.groups_processed == 1
         lembretes = db.scalars(select(Notificacao).where(
             Notificacao.tipo == "PAGAMENTO_VENCENDO",
             Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
@@ -487,8 +493,17 @@ def test_eventos_de_vencimento_e_atraso_sao_idempotentes_e_isolados(
 
         grupo_persistido.data_inicio = date.today()
         db.commit()
-        atrasadas = notificar_pendencias_financeiras(grupo["id"], 1, db)
-        assert len(atrasadas) == 2
+        failing_delivery = FailingEmailDelivery()
+        monkeypatch.setattr(
+            events,
+            "_reliable_email_service",
+            lambda: failing_delivery,
+        )
+        atrasadas = financial_notifications.run_financial_notification_job()
+        atraso_repetido = financial_notifications.run_financial_notification_job()
+        assert atrasadas.groups_processed == 1
+        assert atraso_repetido.groups_processed == 1
+        assert len(failing_delivery.calls) == 2
         notificacoes_atraso = db.scalars(select(Notificacao).where(
             Notificacao.tipo == "PAGAMENTO_ATRASADO",
             Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
