@@ -21,6 +21,7 @@ from ..notifications.events import (
     notificar_pagamento_atrasado,
     notificar_pagamento_confirmado,
     notificar_pagamento_informado,
+    notificar_pagamento_rejeitado,
     notificar_pagamento_vencendo,
     notificar_sorteio_realizado,
 )
@@ -574,13 +575,20 @@ def avaliar_pagamento(
     except Exception:
         db.rollback()
         raise
+    pagador_usuario = next(
+        integrante_usuario
+        for participante, integrante_usuario in integrantes
+        if participante.id == pagamento.pagador_id
+    )
     if confirmar:
-        pagador_usuario = next(
-            integrante_usuario
-            for participante, integrante_usuario in integrantes
-            if participante.id == pagamento.pagador_id
-        )
         notificar_pagamento_confirmado(
+            grupo,
+            numero_ciclo,
+            pagador_usuario,
+            db,
+        )
+    else:
+        notificar_pagamento_rejeitado(
             grupo,
             numero_ciclo,
             pagador_usuario,

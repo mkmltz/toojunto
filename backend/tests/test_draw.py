@@ -706,6 +706,157 @@ def test_confirmacao_notifica_pagador_pos_commit_e_resiste_a_falha_email(
         db.close()
 
 
+def test_rejeicao_notifica_so_pagador_pos_commit_e_cada_nova_rejeicao(
+    contexto,
+    monkeypatch,
+):
+    gestor, primeiro, segundo, externo = contexto
+    grupo, _ = preparar_grupo(contexto)
+    sorteio = client.post(
+        f"/groups/{grupo['id']}/draw", headers=headers(gestor)
+    ).json()
+    usuarios_por_nome = {
+        usuario.nome: usuario for usuario in (gestor, primeiro, segundo)
+    }
+    contemplado = usuarios_por_nome[sorteio["ordem_recebimento"][0]["nome"]]
+    caminho, obrigacoes = _pagamentos_do_ciclo(grupo["id"], 1, contexto)
+    pagador = usuarios_por_nome[obrigacoes[0]["pagador_nome"]]
+    pagamento_id = client.post(
+        caminho, headers=headers(pagador)
+    ).json()["pagamento_id"]
+    rejeitar = f"{caminho}/{pagamento_id}/reject"
+    email_service = Mock()
+    monkeypatch.setattr(
+        events,
+        "_reliable_email_service",
+        lambda: ReliableEmailService(email_service),
+    )
+    evento_original = groups_service.notificar_pagamento_rejeitado
+    estados_observados = []
+
+    def notificar_apos_commit(grupo_evento, numero_ciclo, destinatario, db):
+        verificacao = SessionLocal()
+        try:
+            estados_observados.append(
+                verificacao.get(Pagamento, pagamento_id).status
+            )
+        finally:
+            verificacao.close()
+        return evento_original(grupo_evento, numero_ciclo, destinatario, db)
+
+    monkeypatch.setattr(
+        groups_service,
+        "notificar_pagamento_rejeitado",
+        notificar_apos_commit,
+    )
+
+    assert client.post(rejeitar, headers=headers(externo)).status_code == 404
+    assert client.post(rejeitar, headers=headers(pagador)).status_code == 403
+    primeira = client.post(rejeitar, headers=headers(contemplado))
+    repetida = client.post(rejeitar, headers=headers(contemplado))
+    assert primeira.status_code == 200
+    assert primeira.json()["status_registro"] == "REJEITADO"
+    assert repetida.status_code == 409
+
+    nova_declaracao = client.post(caminho, headers=headers(pagador))
+    assert nova_declaracao.status_code == 201
+    assert nova_declaracao.json()["pagamento_id"] == pagamento_id
+    segunda = client.post(rejeitar, headers=headers(contemplado))
+    assert segunda.status_code == 200
+    assert segunda.json()["status_registro"] == "REJEITADO"
+    assert estados_observados == ["REJEITADO", "REJEITADO"]
+
+    db = SessionLocal()
+    try:
+        rejeicoes = db.scalars(select(Notificacao).where(
+            Notificacao.tipo == "PAGAMENTO_REJEITADO",
+            Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
+        )).all()
+        assert len(rejeicoes) == 2
+        assert {item.usuario_id for item in rejeicoes} == {pagador.id}
+        assert contemplado.id not in {item.usuario_id for item in rejeicoes}
+        assert segundo.id not in {
+            item.usuario_id for item in rejeicoes if segundo.id != pagador.id
+        }
+        assert externo.id not in {item.usuario_id for item in rejeicoes}
+        assert all(
+            item.titulo == "Pagamento não confirmado" for item in rejeicoes
+        )
+        assert all(
+            item.mensagem == (
+                "O pagamento informado não foi confirmado pelo contemplado. "
+                "Acesse o grupo para verificar e, se necessário, informe "
+                "novamente o pagamento."
+            )
+            for item in rejeicoes
+        )
+        entregas = db.scalars(select(EntregaEmail).where(
+            EntregaEmail.notificacao_id.in_([item.id for item in rejeicoes]),
+            EntregaEmail.evento == "PAGAMENTO_REJEITADO",
+        )).all()
+        assert len(entregas) == 2
+        assert all(entrega.status == "SUCESSO" for entrega in entregas)
+        assert email_service.enviar_email.call_count == 3
+        chamadas_rejeicao = [
+            call for call in email_service.enviar_email.call_args_list
+            if call.kwargs["action_label"] == "Ver pagamento"
+        ]
+        assert len(chamadas_rejeicao) == 2
+        assert all(
+            call.kwargs["action_path"] == f"/groups/{grupo['id']}"
+            for call in chamadas_rejeicao
+        )
+    finally:
+        db.close()
+
+
+def test_falha_email_nao_desfaz_rejeicao_ou_notificacao(
+    contexto,
+    monkeypatch,
+):
+    gestor, primeiro, segundo, _ = contexto
+    grupo, _ = preparar_grupo(contexto)
+    sorteio = client.post(
+        f"/groups/{grupo['id']}/draw", headers=headers(gestor)
+    ).json()
+    usuarios_por_nome = {
+        usuario.nome: usuario for usuario in (gestor, primeiro, segundo)
+    }
+    contemplado = usuarios_por_nome[sorteio["ordem_recebimento"][0]["nome"]]
+    caminho, obrigacoes = _pagamentos_do_ciclo(grupo["id"], 1, contexto)
+    pagador = usuarios_por_nome[obrigacoes[0]["pagador_nome"]]
+    pagamento_id = client.post(
+        caminho, headers=headers(pagador)
+    ).json()["pagamento_id"]
+    failing_delivery = FailingEmailDelivery()
+    monkeypatch.setattr(
+        events,
+        "_reliable_email_service",
+        lambda: failing_delivery,
+    )
+
+    resposta = client.post(
+        f"{caminho}/{pagamento_id}/reject",
+        headers=headers(contemplado),
+    )
+    assert resposta.status_code == 200
+    assert resposta.json()["status_registro"] == "REJEITADO"
+
+    db = SessionLocal()
+    try:
+        assert db.get(Pagamento, pagamento_id).status == "REJEITADO"
+        notificacoes = db.scalars(select(Notificacao).where(
+            Notificacao.tipo == "PAGAMENTO_REJEITADO",
+            Notificacao.usuario_id == pagador.id,
+            Notificacao.referencia_contextual == f"/groups/{grupo['id']}",
+        )).all()
+        assert len(notificacoes) == 1
+        assert failing_delivery.calls[0]["notificacao_id"] == notificacoes[0].id
+        assert failing_delivery.calls[0]["evento"] == "PAGAMENTO_REJEITADO"
+    finally:
+        db.close()
+
+
 def test_us011_declaracoes_concorrentes_nao_duplicam(contexto):
     gestor, pagador, _, _ = contexto
     grupo, _ = preparar_grupo(contexto)

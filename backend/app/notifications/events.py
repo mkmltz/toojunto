@@ -256,6 +256,27 @@ def notificar_pagamento_informado(
     )
 
 
+def notificar_pagamento_rejeitado(
+    grupo: Grupo,
+    numero_ciclo: int,
+    pagador: Usuario,
+    db: Session,
+) -> Notificacao:
+    return _notify_user(
+        recipient=pagador,
+        event="PAGAMENTO_REJEITADO",
+        title="Pagamento não confirmado",
+        message=(
+            "O pagamento informado não foi confirmado pelo contemplado. "
+            "Acesse o grupo para verificar e, se necessário, informe "
+            "novamente o pagamento."
+        ),
+        reference=f"/groups/{grupo.id}",
+        action_label="Ver pagamento",
+        db=db,
+    )
+
+
 def notificar_pagamento_atrasado(
     grupo: Grupo,
     numero_ciclo: int,
