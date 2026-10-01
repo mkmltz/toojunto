@@ -43,8 +43,10 @@ describe("US-033 — Minha chave Pix", () => {
     await abrirPix();
 
     expect(screen.getByRole("heading", { name: "Minha chave Pix" })).toBeInTheDocument();
+    expect(screen.getAllByRole("navigation", { name: "Navegação autenticada" })).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "← Voltar para Meus Grupos" }));
     expect(await screen.findByRole("heading", { name: "Meus Grupos" })).toBeInTheDocument();
+    expect(screen.getAllByRole("navigation", { name: "Navegação autenticada" })).toHaveLength(1);
   });
 
   it("mostra loading inicial e estado vazio quando o GET retorna null", async () => {
@@ -63,7 +65,7 @@ describe("US-033 — Minha chave Pix", () => {
     await autenticar();
     await abrirPix("ana@example.com");
 
-    expect(screen.getByLabelText("Chave Pix")).toHaveValue("ana@example.com");
+    await waitFor(() => expect(screen.getByLabelText("Chave Pix")).toHaveValue("ana@example.com"));
     expect(fetch).toHaveBeenCalledWith(
       "http://127.0.0.1:8000/auth/me/pix",
       expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }),

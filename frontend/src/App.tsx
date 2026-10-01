@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AuthLayout } from "./components/AuthLayout";
+import { AuthenticatedBottomNav } from "./components/AuthenticatedBottomNav";
 import { NotificationNavigationProvider } from "./components/AppShell";
 import { CreateGroupPage } from "./pages/CreateGroupPage";
 import { EditGroupPage } from "./pages/EditGroupPage";
@@ -552,7 +553,7 @@ export default function App() {
     return <NotificationNavigationProvider value={{
       unreadCount: quantidadeNaoLidas,
       onOpenNotifications: abrirNotificacoes,
-    }}>{content}</NotificationNavigationProvider>;
+    }}><div className="authenticated-area">{content}<AuthenticatedBottomNav onCriarGrupo={() => setTela("criar-grupo")} onAbrirChavePix={abrirChavePix} onSair={sair} /></div></NotificationNavigationProvider>;
   }
 
   if (carregandoSessao) return <main className="loading-screen">Carregando TooJunto...</main>;

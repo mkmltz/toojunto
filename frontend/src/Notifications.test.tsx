@@ -88,6 +88,7 @@ describe("interface mínima de notificações", () => {
     fireEvent.click(bell);
 
     expect(await screen.findByRole("heading", { name: "Notificações" })).toBeInTheDocument();
+    expect(screen.getAllByRole("navigation", { name: "Navegação autenticada" })).toHaveLength(1);
     expect(screen.getByText("A ordem de recebimento foi definida.")).toBeInTheDocument();
     expect(screen.getByText(/29\/09\/2026,? 14:30/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Não lida. Sorteio realizado" })).toHaveClass("notification-unread");
@@ -115,6 +116,7 @@ describe("interface mínima de notificações", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Não lida. Sorteio realizado" }));
 
     expect(await screen.findByRole("heading", { name: "Grupo Família" })).toBeInTheDocument();
+    expect(screen.getAllByRole("navigation", { name: "Navegação autenticada" })).toHaveLength(1);
     expect(window.location.pathname).toBe("/groups/7");
     expect(screen.getByRole("button", { name: "Notificações" })).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith(

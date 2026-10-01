@@ -66,6 +66,16 @@ describe("US-003.1 e US-004", () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
   beforeEach(() => { localStorage.clear(); vi.stubGlobal("fetch", vi.fn()); });
 
+  it("não mostra navegação autenticada no login nem no cadastro", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" });
+    expect(screen.queryByRole("navigation", { name: "Navegação autenticada" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Criar minha conta" }));
+    expect(screen.getByRole("heading", { name: "Criar sua conta" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Navegação autenticada" })).not.toBeInTheDocument();
+  });
+
   it("carrega Meus Grupos com dados simples de gestor e participante", async () => {
     await autenticar([grupo(), grupo({ id: 2, nome: "Grupo da Família", papel: "PARTICIPANTE", gestor_id: 9, gestor_nome: "Carlos Lima" })]);
     expect(screen.getByText("Grupo dos Amigos")).toBeInTheDocument();
@@ -88,8 +98,18 @@ describe("US-003.1 e US-004", () => {
     expect(await screen.findByRole("heading", { name: "Nenhum grupo ainda" })).toBeInTheDocument();
   });
 
+  it("mantém uma única barra e espaço inferior com muitos grupos", async () => {
+    const muitosGrupos = Array.from({ length: 15 }, (_, indice) => grupo({ id: indice + 1, nome: `Grupo ${indice + 1}` }));
+    await autenticar(muitosGrupos);
+
+    expect(screen.getAllByRole("article")).toHaveLength(15);
+    expect(screen.getAllByRole("navigation", { name: "Navegação autenticada" })).toHaveLength(1);
+    expect(document.querySelector(".authenticated-area .main-content")).toBeInTheDocument();
+  });
+
   it("abre detalhes por GET e persiste o id selecionado", async () => {
     await abrirDetalhes();
+    expect(screen.getAllByRole("navigation", { name: "Navegação autenticada" })).toHaveLength(1);
     expect(screen.getByRole("img", { name: "TooJunto" })).toHaveAttribute("src", "/brand/toojunto-logo-header.png");
     expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:8000/groups/1", expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer token-valido" }) }));
     expect(localStorage.getItem("toojunto_selected_group_id")).toBe("1");
@@ -212,7 +232,8 @@ describe("US-003.1 e US-004", () => {
 
   it("preserva criação com ciclos calculados e sem valor do prêmio", async () => {
     await autenticar();
-    fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Criar novo grupo" }));
+    expect(screen.getAllByRole("navigation", { name: "Navegação autenticada" })).toHaveLength(1);
     preencherFormulario("Grupo Novo", "200.00", "5");
     vi.mocked(fetch).mockResolvedValueOnce(resposta(grupo({ nome: "Grupo Novo", quantidade_participantes: 5, quantidade_ciclos: 5 }), 201));
     fireEvent.click(screen.getByRole("button", { name: "Criar grupo" }));
@@ -228,7 +249,7 @@ describe("US-003.1 e US-004", () => {
 
   it("mostra erro específico de data e preserva o formulário", async () => {
     await autenticar();
-    fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Criar novo grupo" }));
     preencherFormulario("Grupo Data", "180.00", "4");
     vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: [{ loc: ["body", "data_inicio"], msg: "Value error, A data de início do grupo não pode ser menor que a data de hoje.", type: "value_error" }] }, 422));
 
@@ -242,7 +263,7 @@ describe("US-003.1 e US-004", () => {
 
   it("mostra erro específico de nome duplicado na criação", async () => {
     await autenticar();
-    fireEvent.click(screen.getByRole("button", { name: "+ Criar novo grupo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Criar novo grupo" }));
     preencherFormulario("Amigos", "200.00", "5");
     const mensagem = 'Você já possui um grupo ativo chamado "Amigos". Escolha outro nome para o novo grupo.';
     vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: mensagem }, 409));
