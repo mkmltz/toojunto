@@ -22,6 +22,23 @@ class UsuarioResposta(BaseModel):
     email: EmailStr
     telefone: str | None
 
+
+class PixResposta(BaseModel):
+    chave_pix: str | None
+
+
+class PixAtualizacao(BaseModel):
+    chave_pix: str | None = Field(default=None, max_length=255)
+
+    @field_validator("chave_pix")
+    @classmethod
+    def normalizar_chave_pix(cls, chave_pix: str | None) -> str | None:
+        if chave_pix is None:
+            return None
+        chave_pix = chave_pix.strip()
+        return chave_pix or None
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     senha: str = Field(min_length=1, max_length=128)

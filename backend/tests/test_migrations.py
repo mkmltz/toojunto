@@ -31,6 +31,12 @@ INVITE_REJECTION_MIGRATION = (
     / "versions"
     / "f1b6c8d4a2e9_recusa_explicita_de_convite.py"
 )
+PIX_MIGRATION = (
+    BACKEND_ROOT
+    / "migrations"
+    / "versions"
+    / "a8c3e1f5b7d9_chave_pix_opcional.py"
+)
 EXPECTED_TABLES = {
     "ciclos",
     "contemplacoes",
@@ -45,26 +51,29 @@ EXPECTED_TABLES = {
 }
 
 
-def test_alembic_has_single_head_with_invite_rejection_revision():
+def test_alembic_has_single_head_with_pix_revision():
     config = Config(ALEMBIC_CONFIG)
     scripts = ScriptDirectory.from_config(config)
     revisions = list(scripts.walk_revisions())
 
     assert Path(scripts.dir).resolve() == BACKEND_ROOT / "migrations"
-    assert len(revisions) == 4
-    assert revisions[0].revision == "f1b6c8d4a2e9"
-    assert revisions[0].down_revision == "e7d3a9c5f2b4"
-    assert revisions[0].doc == "recusa explicita de convite"
-    assert revisions[1].revision == "e7d3a9c5f2b4"
-    assert revisions[1].down_revision == "c4a8e2f6b1d3"
-    assert revisions[1].doc == "confiabilidade do email"
-    assert revisions[2].revision == "c4a8e2f6b1d3"
-    assert revisions[2].down_revision == "9b2f1c4d7e6a"
-    assert revisions[2].doc == "persistencia de notificacoes"
-    assert revisions[3].revision == "9b2f1c4d7e6a"
-    assert revisions[3].down_revision is None
-    assert revisions[3].doc == "baseline MVP 0.1"
-    assert scripts.get_heads() == ["f1b6c8d4a2e9"]
+    assert len(revisions) == 5
+    assert revisions[0].revision == "a8c3e1f5b7d9"
+    assert revisions[0].down_revision == "f1b6c8d4a2e9"
+    assert revisions[0].doc == "chave pix opcional"
+    assert revisions[1].revision == "f1b6c8d4a2e9"
+    assert revisions[1].down_revision == "e7d3a9c5f2b4"
+    assert revisions[1].doc == "recusa explicita de convite"
+    assert revisions[2].revision == "e7d3a9c5f2b4"
+    assert revisions[2].down_revision == "c4a8e2f6b1d3"
+    assert revisions[2].doc == "confiabilidade do email"
+    assert revisions[3].revision == "c4a8e2f6b1d3"
+    assert revisions[3].down_revision == "9b2f1c4d7e6a"
+    assert revisions[3].doc == "persistencia de notificacoes"
+    assert revisions[4].revision == "9b2f1c4d7e6a"
+    assert revisions[4].down_revision is None
+    assert revisions[4].doc == "baseline MVP 0.1"
+    assert scripts.get_heads() == ["a8c3e1f5b7d9"]
 
 
 def test_alembic_env_uses_application_database_url_and_metadata(monkeypatch):
@@ -169,3 +178,25 @@ def test_invite_rejection_migration_upgrade_and_downgrade_are_symmetric():
 
     assert migration.op.drop_index.call_count == 2
     migration.op.drop_table.assert_called_once_with("recusas_convite")
+
+
+def test_pix_migration_upgrade_and_downgrade_are_symmetric():
+    spec = importlib.util.spec_from_file_location("pix_migration", PIX_MIGRATION)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    migration.op = Mock()
+
+    migration.upgrade()
+
+    migration.op.add_column.assert_called_once()
+    table_name, column = migration.op.add_column.call_args.args
+    assert table_name == "usuarios"
+    assert column.name == "chave_pix"
+    assert column.type.length == 255
+    assert column.nullable is True
+
+    migration.op.reset_mock()
+    migration.downgrade()
+
+    migration.op.drop_column.assert_called_once_with("usuarios", "chave_pix")

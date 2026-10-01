@@ -9,8 +9,9 @@ import { HomePage } from "./pages/HomePage";
 import { InvitePage } from "./pages/InvitePage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
+import { PixPage } from "./pages/PixPage";
 import { RegisterPage } from "./pages/RegisterPage";
-import { ApiError, buscarUsuarioAtual, cadastrarUsuario, fazerLogin } from "./services/auth";
+import { ApiError, atualizarChavePix, buscarChavePix, buscarUsuarioAtual, cadastrarUsuario, fazerLogin } from "./services/auth";
 import { atualizarGrupo, buscarGrupo, cancelarGrupo, criarGrupo, gerarOuObterConvite, listarGrupos, prepararSorteio, realizarSorteio } from "./services/groups";
 import { aceitarConvite, consultarConvite } from "./services/invites";
 import { contarNotificacoesNaoLidas, listarNotificacoes, marcarNotificacaoComoLida } from "./services/notifications";
@@ -21,7 +22,7 @@ import type { NotificationItem } from "./types/notifications";
 
 const CHAVE_TOKEN = "toojunto_access_token";
 const CHAVE_GRUPO = "toojunto_selected_group_id";
-type Tela = "login" | "cadastro" | "home" | "criar-grupo" | "grupo-criado" | "detalhes" | "editar-grupo" | "convite" | "notificacoes";
+type Tela = "login" | "cadastro" | "home" | "criar-grupo" | "grupo-criado" | "detalhes" | "editar-grupo" | "convite" | "notificacoes" | "pix";
 
 function extrairTokenConvite(pathname: string): string | null {
   const correspondencia = pathname.match(/^\/invites\/([^/]+)\/?$/);
@@ -82,6 +83,11 @@ export default function App() {
   const [carregandoNotificacoes, setCarregandoNotificacoes] = useState(false);
   const [lendoNotificacaoId, setLendoNotificacaoId] = useState<number | null>(null);
   const [erroNotificacoes, setErroNotificacoes] = useState("");
+  const [chavePix, setChavePix] = useState<string | null>(null);
+  const [carregandoPix, setCarregandoPix] = useState(false);
+  const [salvandoPix, setSalvandoPix] = useState(false);
+  const [erroPix, setErroPix] = useState("");
+  const [sucessoPix, setSucessoPix] = useState("");
 
   function encerrarSessao(mensagem: string) {
     localStorage.removeItem(CHAVE_TOKEN);
@@ -92,6 +98,7 @@ export default function App() {
     setGrupoCriado(null);
     setQuantidadeNaoLidas(0);
     setNotificacoes([]);
+    setChavePix(null);
     setTela("login");
     setAviso(mensagem);
   }
@@ -233,6 +240,41 @@ export default function App() {
   function abrirNotificacoes() {
     setTela("notificacoes");
     void carregarNotificacoes();
+  }
+
+  async function carregarChavePix() {
+    const token = localStorage.getItem(CHAVE_TOKEN);
+    if (!token) { encerrarSessao("Entre novamente para ver sua chave Pix."); return; }
+    setCarregandoPix(true);
+    setErroPix("");
+    setSucessoPix("");
+    try { setChavePix((await buscarChavePix(token)).chave_pix); }
+    catch (error) {
+      if (error instanceof ApiError && error.status === 401) { encerrarSessao("Sua sessão terminou. Entre novamente para continuar."); return; }
+      setErroPix("Não foi possível carregar sua chave Pix.");
+    } finally { setCarregandoPix(false); }
+  }
+
+  function abrirChavePix() {
+    setTela("pix");
+    void carregarChavePix();
+  }
+
+  async function salvarChavePix(novaChave: string | null) {
+    const token = localStorage.getItem(CHAVE_TOKEN);
+    if (!token) { encerrarSessao("Entre novamente para salvar sua chave Pix."); return; }
+    const tinhaChave = Boolean(chavePix);
+    setSalvandoPix(true);
+    setErroPix("");
+    setSucessoPix("");
+    try {
+      const resposta = await atualizarChavePix({ chave_pix: novaChave }, token);
+      setChavePix(resposta.chave_pix);
+      setSucessoPix(resposta.chave_pix === null ? "Chave Pix removida." : tinhaChave ? "Chave Pix alterada." : "Chave Pix cadastrada.");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) { encerrarSessao("Sua sessão terminou. Entre novamente para continuar."); return; }
+      setErroPix("Não foi possível salvar sua chave Pix.");
+    } finally { setSalvandoPix(false); }
   }
 
   async function navegarParaReferencia(reference: string | null) {
@@ -516,10 +558,11 @@ export default function App() {
   if (carregandoSessao) return <main className="loading-screen">Carregando TooJunto...</main>;
   if (tela === "convite" && conviteToken) return <InvitePage convite={convitePublico} aceite={aceiteConvite} carregando={carregandoConvite} aceitando={aceitandoConvite} erro={erroConvite} autenticado={Boolean(usuario)} indisponivel={conviteIndisponivel} onEntrar={entrarNoGrupoPeloConvite} onAgoraNao={abandonarConvite} onCriarConta={() => setTela("cadastro")} onTentarNovamente={() => setTentativaConvite((tentativa) => tentativa + 1)} onVerGrupo={verGrupoAceito} />;
   if (usuario && tela === "notificacoes") return areaAutenticada(<NotificationsPage nomeUsuario={usuario.nome} notificacoes={notificacoes} carregando={carregandoNotificacoes} lendoId={lendoNotificacaoId} erro={erroNotificacoes} onVoltar={voltarParaHome} onTentarNovamente={carregarNotificacoes} onSelecionar={selecionarNotificacao} />);
+  if (usuario && tela === "pix") return areaAutenticada(<PixPage nomeUsuario={usuario.nome} chavePix={chavePix} carregando={carregandoPix} salvando={salvandoPix} erro={erroPix} sucesso={sucessoPix} onVoltar={voltarParaHome} onTentarNovamente={carregarChavePix} onSalvar={salvarChavePix} />);
   if (usuario && tela === "criar-grupo") return areaAutenticada(<CreateGroupPage nomeUsuario={usuario.nome} carregando={enviando} onVoltar={voltarParaHome} onCriar={cadastrarGrupo} />);
   if (usuario && tela === "grupo-criado" && grupoCriado) return areaAutenticada(<GroupCreatedPage nomeUsuario={usuario.nome} grupo={grupoCriado} onVoltar={voltarParaHome} onVerGrupo={() => abrirGrupo(grupoCriado.id)} />);
   if (usuario && tela === "editar-grupo" && grupoSelecionado) return areaAutenticada(<EditGroupPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} carregando={enviando} onVoltar={() => setTela("detalhes")} onSalvar={atualizarGrupoSelecionado} />);
   if (usuario && tela === "detalhes" && grupoSelecionado) return areaAutenticada(<GroupDetailsPage nomeUsuario={usuario.nome} usuarioId={usuario.id} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarParaHome} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} onObterConvite={obterConviteSelecionado} onPrepararSorteio={prepararSorteioSelecionado} onRealizarSorteio={realizarSorteioSelecionado} />);
-  if (usuario) return areaAutenticada(<HomePage usuario={usuario} grupos={grupos} carregando={carregandoLista} erro={erroLista || avisoGrupo} onAbrirGrupo={abrirGrupo} onCriarGrupo={() => setTela("criar-grupo")} onRecarregar={carregarGrupos} onSair={sair} />);
+  if (usuario) return areaAutenticada(<HomePage usuario={usuario} grupos={grupos} carregando={carregandoLista} erro={erroLista || avisoGrupo} onAbrirGrupo={abrirGrupo} onCriarGrupo={() => setTela("criar-grupo")} onAbrirChavePix={abrirChavePix} onRecarregar={carregarGrupos} onSair={sair} />);
   return <AuthLayout>{tela === "login" ? <LoginPage aviso={aviso} carregando={enviando} onEntrar={entrar} onCadastrar={() => { setAviso(""); setTela("cadastro"); }} onVoltarConvite={conviteToken ? () => setTela("convite") : undefined} /> : <RegisterPage carregando={enviando} onVoltar={() => setTela("login")} onCadastrar={cadastrar} />}</AuthLayout>;
 }

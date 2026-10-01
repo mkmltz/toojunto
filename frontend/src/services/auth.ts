@@ -1,4 +1,4 @@
-import type { CadastroDados, LoginDados, TokenResposta, Usuario } from "../types/auth";
+import type { CadastroDados, ChavePixAtualizacao, ChavePixResposta, LoginDados, TokenResposta, Usuario } from "../types/auth";
 import { resolveApiUrl } from "../../api-url";
 
 const API_URL = resolveApiUrl({
@@ -28,3 +28,5 @@ export async function requisicao<T>(caminho: string, opcoes: RequestInit = {}): 
 export const fazerLogin = (dados: LoginDados) => requisicao<TokenResposta>("/auth/login", { method: "POST", body: JSON.stringify(dados) });
 export const cadastrarUsuario = (dados: CadastroDados) => requisicao<Usuario>("/auth/register", { method: "POST", body: JSON.stringify(dados) });
 export const buscarUsuarioAtual = (token: string) => requisicao<Usuario>("/auth/me", { headers: { Authorization: `Bearer ${token}` } });
+export const buscarChavePix = (token: string) => requisicao<ChavePixResposta>("/auth/me/pix", { headers: { Authorization: `Bearer ${token}` } });
+export const atualizarChavePix = (dados: ChavePixAtualizacao, token: string) => requisicao<ChavePixResposta>("/auth/me/pix", { method: "PUT", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(dados) });

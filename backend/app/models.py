@@ -20,6 +20,7 @@ class Usuario(Base):
     nome: Mapped[str] = mapped_column(String(120))
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     telefone: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    chave_pix: Mapped[str | None] = mapped_column(String(255), nullable=True)
     senha_hash: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     notificacoes: Mapped[list["Notificacao"]] = relationship(

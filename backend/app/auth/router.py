@@ -6,6 +6,8 @@ from ..db import get_db
 from ..models import Usuario
 from .schemas import (
     LoginRequest,
+    PixAtualizacao,
+    PixResposta,
     TokenResposta,
     UsuarioCadastro,
     UsuarioResposta,
@@ -32,6 +34,31 @@ def obter_usuario_atual(
     usuario: Usuario = Depends(get_current_user),
 ):
     return usuario
+
+
+@router.get(
+    "/me/pix",
+    response_model=PixResposta,
+)
+def obter_chave_pix(
+    usuario: Usuario = Depends(get_current_user),
+):
+    return {"chave_pix": usuario.chave_pix}
+
+
+@router.put(
+    "/me/pix",
+    response_model=PixResposta,
+)
+def atualizar_chave_pix(
+    dados: PixAtualizacao,
+    usuario: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    usuario.chave_pix = dados.chave_pix
+    db.commit()
+    db.refresh(usuario)
+    return {"chave_pix": usuario.chave_pix}
 
 
 @router.post(
