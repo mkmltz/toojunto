@@ -839,7 +839,8 @@ describe("US-011", () => {
     expect(within(itens[0]).getByText(chaveLonga).parentElement).toHaveClass("payment-pix");
     expect(within(itens[1]).queryByText(/Chave Pix/)).not.toBeInTheDocument();
     expect(screen.queryByText("nao-deve-aparecer@example.com")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /copiar/i })).not.toBeInTheDocument();
+    expect(within(itens[0]).getByRole("button", { name: "Copiar chave Pix" })).toBeInTheDocument();
+    expect(within(itens[1]).queryByRole("button", { name: "Copiar chave Pix" })).not.toBeInTheDocument();
   });
 
   it("informa ausência somente no card próprio e não bloqueia Informar pagamento", async () => {
@@ -848,6 +849,7 @@ describe("US-011", () => {
 
     expect(within(itens[0]).getByText("Chave Pix não informada.")).toBeInTheDocument();
     expect(within(itens[1]).queryByText("Chave Pix não informada.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copiar chave Pix" })).not.toBeInTheDocument();
     fireEvent.click(within(itens[0]).getByRole("button", { name: "Informar pagamento" }));
     expect(screen.getByRole("dialog", { name: "Confirmar pagamento" })).toBeInTheDocument();
   });
@@ -865,6 +867,33 @@ describe("US-011", () => {
     expect(within(itens[0]).getByRole("button", { name: "Informar pagamento" })).toBeInTheDocument();
     expect(within(itens[1]).queryByText(chave)).not.toBeInTheDocument();
     expect(within(itens[2]).queryByText(chave)).not.toBeInTheDocument();
+    expect(within(itens[1]).queryByRole("button", { name: "Copiar chave Pix" })).not.toBeInTheDocument();
+    expect(within(itens[2]).queryByRole("button", { name: "Copiar chave Pix" })).not.toBeInTheDocument();
+  });
+
+  it("copia exatamente a chave Pix e apresenta sucesso", async () => {
+    const escreverClipboard = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: escreverClipboard } });
+    const chave = "maria@example.com";
+    const area = await abrirComObrigacoes([{ ...propria, chave_pix_recebedor: chave }]);
+
+    fireEvent.click(within(area).getByRole("button", { name: "Copiar chave Pix" }));
+
+    await waitFor(() => expect(escreverClipboard).toHaveBeenCalledWith(chave));
+    expect(within(area).getByRole("status")).toHaveTextContent("Chave Pix copiada.");
+  });
+
+  it("mantém a chave visível e apresenta erro quando o clipboard falha", async () => {
+    const escreverClipboard = vi.fn().mockRejectedValue(new Error("indisponível"));
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: escreverClipboard } });
+    const chave = "maria@example.com";
+    const area = await abrirComObrigacoes([{ ...propria, chave_pix_recebedor: chave }]);
+
+    fireEvent.click(within(area).getByRole("button", { name: "Copiar chave Pix" }));
+
+    expect(await within(area).findByRole("alert")).toHaveTextContent("Não foi possível copiar. Copie a chave manualmente.");
+    expect(within(area).getByText(chave)).toBeInTheDocument();
+    expect(within(area).queryByText("Chave Pix copiada.")).not.toBeInTheDocument();
   });
 
   it("não mostra Pix nem ação quando o ciclo exibido é histórico", async () => {
