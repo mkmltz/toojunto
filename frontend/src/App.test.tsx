@@ -69,6 +69,7 @@ describe("US-003.1 e US-004", () => {
   it("não mostra navegação autenticada no login nem no cadastro", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" });
+    expect(screen.getByText("TooJunto MVP 0.3")).toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Navegação autenticada" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Criar minha conta" }));
