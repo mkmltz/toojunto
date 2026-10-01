@@ -89,6 +89,7 @@ export interface ObrigacaoPagamento {
   pagador_nome: string;
   recebedor_id: number;
   recebedor_nome: string;
+  chave_pix_recebedor: string | null;
   valor: string;
   data_prevista: string;
   prazo_pagamento: string;

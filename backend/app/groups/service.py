@@ -367,10 +367,11 @@ def _obrigacoes_pagamento(
     prazo = data_prevista - timedelta(days=5)
     dias_ate_data = (data_prevista - date.today()).days
     dias_ate_prazo = (prazo - date.today()).days
-    pode_avaliar_ciclo = (
-        usuario.id == recebedor.id and grupo.status == "ATIVO"
+    ciclo_atual_ativo = (
+        grupo.status == "ATIVO"
         and numero_ciclo == _numero_ciclo_atual(grupo, db)
     )
+    pode_avaliar_ciclo = usuario.id == recebedor.id and ciclo_atual_ativo
     return [
         ObrigacaoPagamentoResposta(
             grupo_id=grupo.id,
@@ -381,6 +382,16 @@ def _obrigacoes_pagamento(
             pagador_nome=pagador.nome,
             recebedor_id=contemplado.id,
             recebedor_nome=recebedor.nome,
+            chave_pix_recebedor=(
+                recebedor.chave_pix
+                if ciclo_atual_ativo
+                and pagador.id == usuario.id
+                and (
+                    participante.id not in pagamentos
+                    or pagamentos[participante.id].status == "REJEITADO"
+                )
+                else None
+            ),
             valor=grupo.valor_cota,
             data_prevista=data_prevista,
             prazo_pagamento=prazo,

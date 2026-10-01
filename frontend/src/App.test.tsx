@@ -698,7 +698,7 @@ describe("US-011", () => {
   };
   const propria = {
     grupo_id: 1, numero_ciclo: 1, pagador_id: 42, pagador_usuario_id: 1,
-    pagador_nome: "Ana Souza", recebedor_id: 8, recebedor_nome: "Maria", valor: "200.00",
+    pagador_nome: "Ana Souza", recebedor_id: 8, recebedor_nome: "Maria", chave_pix_recebedor: null, valor: "200.00",
     data_prevista: "2026-10-10", prazo_pagamento: "2026-10-05",
     dias_ate_data_prevista: 5, dias_ate_prazo: 0, alerta_prazo: true,
     situacao: "PENDENTE", status_registro: null, declarado_em: null,
@@ -824,6 +824,58 @@ describe("US-011", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Confirmar pagamento" })).not.toBeInTheDocument();
     expect(within(area).getByRole("button", { name: "Informar pagamento" })).toHaveFocus();
+  });
+
+  it("mostra a chave somente no card próprio autorizado e suporta chave longa", async () => {
+    const chaveLonga = "123e4567-e89b-12d3-a456-426614174000-chave-longa-sem-espacos";
+    const area = await abrirComObrigacoes([
+      { ...propria, chave_pix_recebedor: chaveLonga },
+      { ...outra, chave_pix_recebedor: "nao-deve-aparecer@example.com" },
+    ]);
+    const itens = within(area).getAllByRole("listitem");
+
+    expect(within(itens[0]).getByText("Chave Pix de Maria")).toBeInTheDocument();
+    expect(within(itens[0]).getByText(chaveLonga)).toBeInTheDocument();
+    expect(within(itens[0]).getByText(chaveLonga).parentElement).toHaveClass("payment-pix");
+    expect(within(itens[1]).queryByText(/Chave Pix/)).not.toBeInTheDocument();
+    expect(screen.queryByText("nao-deve-aparecer@example.com")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /copiar/i })).not.toBeInTheDocument();
+  });
+
+  it("informa ausência somente no card próprio e não bloqueia Informar pagamento", async () => {
+    const area = await abrirComObrigacoes([propria, outra]);
+    const itens = within(area).getAllByRole("listitem");
+
+    expect(within(itens[0]).getByText("Chave Pix não informada.")).toBeInTheDocument();
+    expect(within(itens[1]).queryByText("Chave Pix não informada.")).not.toBeInTheDocument();
+    fireEvent.click(within(itens[0]).getByRole("button", { name: "Informar pagamento" }));
+    expect(screen.getByRole("dialog", { name: "Confirmar pagamento" })).toBeInTheDocument();
+  });
+
+  it("mostra Pix em rejeitado e oculta em aguardando confirmação e confirmado", async () => {
+    const chave = "maria@example.com";
+    const area = await abrirComObrigacoes([
+      { ...propria, situacao: "REJEITADO", status_registro: "REJEITADO", chave_pix_recebedor: chave },
+      { ...outra, pagador_usuario_id: 1, situacao: "AGUARDANDO_CONFIRMACAO", status_registro: "AGUARDANDO_CONFIRMACAO", chave_pix_recebedor: chave },
+      { ...outra, pagador_id: 44, pagador_usuario_id: 1, situacao: "CONFIRMADO", status_registro: "CONFIRMADO", chave_pix_recebedor: chave },
+    ]);
+    const itens = within(area).getAllByRole("listitem");
+
+    expect(within(itens[0]).getByText(chave)).toBeInTheDocument();
+    expect(within(itens[0]).getByRole("button", { name: "Informar pagamento" })).toBeInTheDocument();
+    expect(within(itens[1]).queryByText(chave)).not.toBeInTheDocument();
+    expect(within(itens[2]).queryByText(chave)).not.toBeInTheDocument();
+  });
+
+  it("não mostra Pix nem ação quando o ciclo exibido é histórico", async () => {
+    await autenticar([grupoAtivo]);
+    const progressoHistorico = { ...progresso, grupo_concluido: true };
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(grupoAtivo)).mockResolvedValueOnce(resposta(progressoHistorico)).mockResolvedValueOnce(resposta([{ ...propria, chave_pix_recebedor: "maria@example.com" }]));
+    fireEvent.click(screen.getByRole("button", { name: "Ver grupo" }));
+    const area = await screen.findByRole("region", { name: "Pagamentos do último ciclo" });
+
+    expect(within(area).queryByText(/Chave Pix/)).not.toBeInTheDocument();
+    expect(within(area).queryByRole("button", { name: "Informar pagamento" })).not.toBeInTheDocument();
   });
 });
 

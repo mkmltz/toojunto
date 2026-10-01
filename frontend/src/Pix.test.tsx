@@ -15,6 +15,10 @@ async function autenticar() {
     .mockResolvedValueOnce(resposta([]));
   render(<App />);
   await screen.findByRole("heading", { name: "Meus Grupos" });
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+    "http://127.0.0.1:8000/notifications/unread-count",
+    expect.anything(),
+  ));
 }
 
 async function abrirPix(chavePix: string | null = null) {

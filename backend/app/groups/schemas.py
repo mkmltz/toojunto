@@ -180,6 +180,7 @@ class ObrigacaoPagamentoResposta(BaseModel):
     pagador_nome: str
     recebedor_id: int
     recebedor_nome: str
+    chave_pix_recebedor: str | None = None
     valor: Decimal
     data_prevista: date
     prazo_pagamento: date

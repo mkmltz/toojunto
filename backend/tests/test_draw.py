@@ -399,6 +399,125 @@ def test_us011_obrigacoes_autorizacao_e_declaracao(contexto):
         db.close()
 
 
+def test_us034_pix_do_contemplado_so_aparece_na_obrigacao_autorizada(contexto):
+    gestor, pagador, outro, externo = contexto
+    gestor.chave_pix = "gestor@example.com"
+    db = SessionLocal()
+    try:
+        db.get(Usuario, gestor.id).chave_pix = gestor.chave_pix
+        db.commit()
+    finally:
+        db.close()
+    grupo, _ = preparar_grupo(contexto)
+    assert client.post(
+        f"/groups/{grupo['id']}/draw", headers=headers(gestor)
+    ).status_code == 200
+    caminho = f"/groups/{grupo['id']}/cycles/1/payments"
+
+    obrigacoes_pagador = client.get(caminho, headers=headers(pagador)).json()
+    propria_pagador = next(
+        item for item in obrigacoes_pagador
+        if item["pagador_usuario_id"] == pagador.id
+    )
+    alheia_pagador = next(
+        item for item in obrigacoes_pagador
+        if item["pagador_usuario_id"] == outro.id
+    )
+    assert propria_pagador["chave_pix_recebedor"] == "gestor@example.com"
+    assert alheia_pagador["chave_pix_recebedor"] is None
+
+    obrigacoes_outro = client.get(caminho, headers=headers(outro)).json()
+    propria_outro = next(
+        item for item in obrigacoes_outro
+        if item["pagador_usuario_id"] == outro.id
+    )
+    alheia_outro = next(
+        item for item in obrigacoes_outro
+        if item["pagador_usuario_id"] == pagador.id
+    )
+    assert propria_outro["chave_pix_recebedor"] == "gestor@example.com"
+    assert alheia_outro["chave_pix_recebedor"] is None
+
+    assert all(
+        item["chave_pix_recebedor"] is None
+        for item in client.get(caminho, headers=headers(gestor)).json()
+    )
+    assert client.get(caminho, headers=headers(externo)).status_code == 404
+    assert client.get(caminho).status_code == 401
+
+    declaracao_pagador = client.post(caminho, headers=headers(pagador)).json()
+    apos_declarar = client.get(caminho, headers=headers(pagador)).json()
+    assert all(item["chave_pix_recebedor"] is None for item in apos_declarar)
+    assert client.post(
+        f"{caminho}/{declaracao_pagador['pagamento_id']}/reject",
+        headers=headers(gestor),
+    ).status_code == 200
+    rejeitada = next(
+        item for item in client.get(caminho, headers=headers(pagador)).json()
+        if item["pagador_usuario_id"] == pagador.id
+    )
+    assert rejeitada["chave_pix_recebedor"] == "gestor@example.com"
+
+    redeclarada = client.post(caminho, headers=headers(pagador)).json()
+    assert client.post(
+        f"{caminho}/{redeclarada['pagamento_id']}/confirm",
+        headers=headers(gestor),
+    ).status_code == 200
+    declaracao_outro = client.post(caminho, headers=headers(outro)).json()
+    assert client.post(
+        f"{caminho}/{declaracao_outro['pagamento_id']}/confirm",
+        headers=headers(gestor),
+    ).status_code == 200
+    historico = client.get(caminho, headers=headers(pagador)).json()
+    assert all(item["chave_pix_recebedor"] is None for item in historico)
+
+
+def test_us034_pix_ausente_nao_bloqueia_declaracao_e_declarado_nao_expoe(contexto):
+    gestor, pagador, _, _ = contexto
+    grupo, _ = preparar_grupo(contexto)
+    assert client.post(
+        f"/groups/{grupo['id']}/draw", headers=headers(gestor)
+    ).status_code == 200
+    caminho = f"/groups/{grupo['id']}/cycles/1/payments"
+
+    propria = next(
+        item for item in client.get(caminho, headers=headers(pagador)).json()
+        if item["pagador_usuario_id"] == pagador.id
+    )
+    assert propria["chave_pix_recebedor"] is None
+
+    declaracao = client.post(caminho, headers=headers(pagador))
+    assert declaracao.status_code == 201
+    assert declaracao.json()["status_registro"] == "AGUARDANDO_CONFIRMACAO"
+    assert declaracao.json()["chave_pix_recebedor"] is None
+
+
+def test_us034_pix_nao_vaza_em_contratos_genericos(contexto):
+    gestor, pagador, _, _ = contexto
+    gestor.chave_pix = "privada@example.com"
+    db = SessionLocal()
+    try:
+        db.get(Usuario, gestor.id).chave_pix = gestor.chave_pix
+        db.commit()
+    finally:
+        db.close()
+    grupo, _ = criar_grupo(gestor)
+    convite = client.post(
+        f"/groups/{grupo['id']}/invite", headers=headers(gestor)
+    ).json()
+
+    assert "chave_pix" not in client.get(
+        "/auth/me", headers=headers(gestor)
+    ).json()
+    detalhe = client.get(
+        f"/groups/{grupo['id']}", headers=headers(gestor)
+    ).json()
+    assert "chave_pix" not in detalhe
+    assert all("chave_pix" not in item for item in detalhe["formacao"]["participantes"])
+    convite_publico = client.get(f"/invites/{convite['token']}").json()
+    assert all("pix" not in chave.lower() for chave in convite_publico)
+
+
 def test_us011_prazo_alerta_e_atraso(contexto):
     gestor, pagador, _, _ = contexto
     grupo, _ = preparar_grupo(contexto)
