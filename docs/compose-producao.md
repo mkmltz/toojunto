@@ -4,10 +4,9 @@ Esta configuração integra Frontend, Backend e PostgreSQL sem configurar
 VPS, domínio ou HTTPS. Somente o Frontend publica uma porta no host.
 Backend e banco permanecem acessíveis apenas pela rede Docker.
 
-> **STAGING existente:** não execute os comandos de backup, restore, adoção ou
-> migration deste documento no banco atual sem a etapa operacional controlada
-> e a autorização prevista para a US-017. O exemplo de primeira inicialização
-> abaixo destina-se a um banco novo e vazio.
+> **STAGING existente:** não execute comandos de backup, restore, adoção ou
+> migration no banco atual fora de uma etapa operacional autorizada. O exemplo
+> de primeira inicialização abaixo destina-se somente a banco novo e vazio.
 
 ## Variáveis
 
@@ -20,6 +19,13 @@ banco nessa URL deve ser `db`.
 Para validação local, use `ALLOWED_HOSTS=localhost,127.0.0.1`. Quando
 Frontend e API estiverem sob a mesma origem, `CORS_ORIGINS` pode
 permanecer vazio.
+
+E-mails transacionais exigem `PUBLIC_APP_URL`, `SMTP_HOST` e
+`SMTP_FROM_EMAIL`. `SMTP_USERNAME` e `SMTP_PASSWORD` devem ser configurados
+em conjunto quando o provedor exigir autenticação. Porta, nome do remetente,
+TLS e timeout usam os defaults documentados em `production.env.example`, mas
+devem ser conferidos com o provedor antes do deploy. Nunca coloque valores
+reais no arquivo de exemplo.
 
 ## Construção e primeira inicialização
 
@@ -126,22 +132,20 @@ operacionais.
 
 ### Proteção do STAGING
 
-Até a conclusão desta documentação, nenhuma adoção Alembic foi executada no
-STAGING/PILOTO. Não execute `app.adopt_mvp_0_1`, `alembic stamp`, `alembic
-upgrade` ou `alembic downgrade` nesse ambiente sem backup verificável e sem a
-autorização operacional correspondente.
+Historicamente, o banco do piloto existiu antes da adoção do Alembic. As
+US-016 e US-017 concluíram a validação operacional de backup, adoção, deploy e
+rollback no STAGING. Isso não autoriza execuções futuras automaticamente.
 
-O procedimento da US-016 foi validado somente em ambiente local descartável;
-nenhum backup real do piloto existe como resultado dessa validação. A adoção do
-banco do piloto exige primeiro um backup real verificado em etapa operacional
-posterior. A US-017 definirá o procedimento seguro de deploy, migrations,
-verificações de saúde e rollback no STAGING.
+Em toda nova release, confirme o estado real com `alembic current`, faça e
+valide um novo backup e siga o runbook pelo commit homologado. Não execute
+`app.adopt_mvp_0_1`, `alembic stamp`, `alembic upgrade` ou `alembic downgrade`
+sem identificar previamente o estado do banco e obter autorização operacional.
 
 ## Backup e restauração do PostgreSQL
 
 O procedimento abaixo usa `pg_dump` e `pg_restore` do PostgreSQL 16 dentro do
-serviço Docker `db`. Ele foi validado localmente com bancos descartáveis. Ainda
-não foi executado no STAGING/PILOTO.
+serviço Docker `db`. Foi validado com bancos descartáveis e operacionalmente no
+STAGING durante a US-016. Cada release continua exigindo novo backup validado.
 
 ### Pré-requisitos
 
@@ -242,9 +246,10 @@ procedimento.
 
 ## Runbook de deploy seguro no STAGING
 
-Este runbook foi preparado e validado localmente. Ele ainda não foi executado
-na VPS. Cada bloco é um gate: diante de resultado inesperado, interrompa o
-deploy, preserve as evidências e não avance por tentativa e erro.
+Este runbook foi validado no STAGING durante a US-017. Sua execução para uma
+nova release continua dependendo de autorização específica. Cada bloco é um
+gate: diante de resultado inesperado, interrompa o deploy, preserve as
+evidências e não avance por tentativa e erro.
 
 Use sempre o mesmo identificador de projeto Compose:
 
@@ -284,7 +289,7 @@ Confirme a presença das variáveis obrigatórias sem exibir valores:
 
 ``` bash
 test -f production.env
-for name in POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD DATABASE_URL JWT_SECRET ALLOWED_HOSTS; do
+for name in POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD DATABASE_URL JWT_SECRET ALLOWED_HOSTS PUBLIC_APP_URL SMTP_HOST SMTP_FROM_EMAIL; do
   grep -qE "^${name}=.+" production.env || { echo "Variável obrigatória ausente: ${name}"; exit 1; }
 done
 docker version
@@ -358,8 +363,8 @@ $COMPOSE run --rm --no-deps backend python -m alembic history
 $COMPOSE run --rm --no-deps backend python -m alembic heads
 ```
 
-Compare a head retornada com a revision prevista na versão homologada. Enquanto
-não houver migration posterior, a única head esperada é `9b2f1c4d7e6a`. Head
+Compare a head retornada com a revision prevista na versão homologada. Para a
+RC da MVP 0.3, a única head esperada é `a8c3e1f5b7d9`. Head
 ausente, múltipla ou inesperada aborta o deploy.
 
 ### 4. Primeiro deploy pós-Alembic
@@ -401,6 +406,7 @@ Em todo deploy com banco já controlado:
 $COMPOSE run --rm --no-deps backend python -m alembic current
 $COMPOSE run --rm --no-deps backend python -m alembic upgrade head
 $COMPOSE run --rm --no-deps backend python -m alembic current
+$COMPOSE run --rm --no-deps backend python -m alembic heads
 $COMPOSE run --rm --no-deps backend python -m alembic check
 ```
 
@@ -505,7 +511,30 @@ O deploy somente termina após registrar:
 
 Qualquer gate não aprovado mantém o deploy como falho ou interrompido. A
 execução real deste runbook no STAGING requer autorização separada e será a
-evidência necessária para decidir o encerramento da US-017.
+evidência necessária para homologar a release em execução.
+
+## Agendamento dos lembretes financeiros
+
+Para a MVP 0.3, o acionador escolhido é o `cron` do host. O job roda diariamente
+às 08:00 no fuso `America/Bahia`, em container efêmero do serviço Backend. O
+`flock` impede duas execuções simultâneas e a saída é anexada a um log dedicado.
+
+Instale somente durante uma etapa operacional autorizada, com o checkout em
+`/opt/toojunto`, adicionando ao crontab do usuário operacional:
+
+``` cron
+CRON_TZ=America/Bahia
+0 8 * * * cd /opt/toojunto && /usr/bin/flock -n /run/lock/toojunto-financial-notifications.lock /usr/bin/docker compose --project-name toojunto --env-file production.env -f docker-compose.prod.yml run --rm --no-deps backend python -m app.jobs.financial_notifications >> /var/log/toojunto-financial-notifications.log 2>&1
+```
+
+Antes de instalar, confirme os caminhos de `docker`, `flock`, checkout e log no
+host. Para validar, confira `crontab -l`, timestamp/saída do log e os registros
+de notificações e entregas criados. Execute novamente de forma controlada para
+confirmar a idempotência. Exit code diferente de zero fica registrado no log;
+o job não deve ser repetido manualmente por tentativa e erro sem diagnóstico.
+
+Para desabilitar, comente ou remova somente essa entrada do crontab e confirme
+com `crontab -l`. A remoção do agendamento não altera dados nem containers.
 
 ## Operação
 
@@ -551,4 +580,4 @@ Regras operacionais:
 O procedimento com `app.init_db` permanece temporariamente apenas por
 compatibilidade. A operação oficial de schema está definida na seção
 [Operação de migrations](#operação-de-migrations), respeitando a proteção do
-STAGING e o procedimento operacional ainda pendente da US-017.
+STAGING e o runbook operacional validado na US-017.

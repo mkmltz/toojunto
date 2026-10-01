@@ -1,12 +1,17 @@
 from fastapi.testclient import TestClient
-from app.main import app
+from app.main import APP_VERSION, app
 
 client = TestClient(app)
 
 def test_health():
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    assert response.json() == {
+        "status": "ok",
+        "service": "toojunto-api",
+        "version": "0.3.0",
+    }
+    assert app.version == APP_VERSION == "0.3.0"
 
 
 def test_health_db():

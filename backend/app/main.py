@@ -12,10 +12,13 @@ from .invites.router import router as invites_router
 from .notifications.router import router as notifications_router
 
 
+APP_VERSION = "0.3.0"
+
+
 def create_app(app_settings: Settings = settings) -> FastAPI:
     application = FastAPI(
         title="TooJunto API",
-        version="0.1.0",
+        version=APP_VERSION,
         docs_url=app_settings.docs_url,
         redoc_url=app_settings.redoc_url,
         openapi_url=app_settings.openapi_url,
@@ -38,7 +41,7 @@ def create_app(app_settings: Settings = settings) -> FastAPI:
 
     @application.get("/health")
     def health():
-        return {"status": "ok", "service": "toojunto-api", "version": "0.1.0"}
+        return {"status": "ok", "service": "toojunto-api", "version": APP_VERSION}
 
     @application.get("/health/db")
     def health_db():
