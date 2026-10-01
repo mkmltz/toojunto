@@ -301,6 +301,42 @@ describe("US-003.1 e US-004", () => {
     expect(localStorage.getItem("toojunto_access_token")).toBeNull();
   });
 
+  it("limpa grupos e chave Pix ao trocar da sessão A para a sessão B", async () => {
+    const usuarioB = { id: 2, nome: "Bruna Lima", email: "bruna@example.com", telefone: null };
+    let logins = 0;
+    vi.mocked(fetch).mockImplementation(async (input, options) => {
+      const url = String(input);
+      const authorization = (options?.headers as Record<string, string> | undefined)?.Authorization;
+      if (url.endsWith("/auth/login")) {
+        logins += 1;
+        return resposta({ access_token: logins === 1 ? "token-a" : "token-b", token_type: "bearer" });
+      }
+      if (url.endsWith("/auth/me")) return resposta(authorization === "Bearer token-a" ? usuario : usuarioB);
+      if (url.endsWith("/groups")) return resposta(authorization === "Bearer token-a" ? [grupo({ nome: "Grupo privado A" })] : []);
+      if (url.endsWith("/notifications/unread-count")) return resposta({ count: 0 });
+      if (url.endsWith("/auth/me/pix")) return resposta({ chave_pix: authorization === "Bearer token-a" ? "pix-privado-a" : null });
+      throw new Error(`Requisição inesperada: ${url}`);
+    });
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "ana@example.com" } });
+    fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "senha-segura" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+    expect(await screen.findByText("Grupo privado A")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Minha chave Pix" }));
+    expect(await screen.findByLabelText("Chave Pix")).toHaveValue("pix-privado-a");
+    fireEvent.click(screen.getByRole("button", { name: "Sair" }));
+
+    fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "bruna@example.com" } });
+    fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "senha-segura" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+    expect(await screen.findByRole("heading", { name: "Nenhum grupo ainda" })).toBeInTheDocument();
+    expect(screen.queryByText("Grupo privado A")).not.toBeInTheDocument();
+    expect(screen.queryByText("pix-privado-a")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Minha chave Pix" }));
+    expect(await screen.findByLabelText("Chave Pix")).toHaveValue("");
+  });
+
   it("usa sempre a terminologia Grupo", async () => {
     await autenticar();
     expect(document.body.textContent).not.toMatch(/caixinha/i);
@@ -708,6 +744,20 @@ describe("US-010", () => {
     await abrirDetalhes(grupo({ status: "SORTEIO" }));
     expect(screen.queryByRole("region", { name: "Ciclo atual" })).not.toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalledWith("http://127.0.0.1:8000/groups/1/cycles", expect.anything());
+  });
+
+  it("encerra a sessão quando o carregamento financeiro retorna 401", async () => {
+    const ativo = grupo({ status: "ATIVO", papel: "PARTICIPANTE" });
+    await autenticar([ativo]);
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(resposta(ativo))
+      .mockResolvedValueOnce(resposta({ detail: "Credenciais inválidas." }, 401));
+
+    fireEvent.click(screen.getByRole("button", { name: "Ver grupo" }));
+
+    expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
+    expect(localStorage.getItem("toojunto_access_token")).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Navegação autenticada" })).not.toBeInTheDocument();
   });
 });
 

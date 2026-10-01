@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AppShell } from "../components/AppShell";
+import { ApiError } from "../services/auth";
 import { avaliarPagamento, buscarObrigacoesPagamento, buscarProgressoGrupo, informarPagamento } from "../services/groups";
 import type { ConviteGrupo, GrupoDetalhe, ObrigacaoPagamento, ProgressoGrupo, SituacaoCiclo, SituacaoObrigacao } from "../types/groups";
 
@@ -29,9 +30,10 @@ interface GroupDetailsPageProps {
   onObterConvite: () => Promise<ConviteGrupo>;
   onPrepararSorteio: () => Promise<void>;
   onRealizarSorteio: () => Promise<void>;
+  onSessaoExpirada: () => void;
 }
 
-export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carregando, onVoltar, onEditar, onCancelar, onObterConvite, onPrepararSorteio, onRealizarSorteio }: GroupDetailsPageProps) {
+export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carregando, onVoltar, onEditar, onCancelar, onObterConvite, onPrepararSorteio, onRealizarSorteio, onSessaoExpirada }: GroupDetailsPageProps) {
   const [confirmando, setConfirmando] = useState(false);
   const [confirmandoSorteio, setConfirmandoSorteio] = useState(false);
   const [executandoSorteio, setExecutandoSorteio] = useState(false);
@@ -97,12 +99,19 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
     setErroProgresso("");
     if (grupo.status !== "ATIVO" && grupo.status !== "ENCERRADO") return;
     const token = localStorage.getItem("toojunto_access_token");
-    if (!token) return;
+    if (!token) { onSessaoExpirada(); return; }
     let ativo = true;
     setCarregandoProgresso(true);
     buscarProgressoGrupo(grupo.id, token)
       .then((dados) => { if (ativo) setProgresso(dados); })
-      .catch(() => { if (ativo) setErroProgresso("Não foi possível carregar o progresso do grupo."); })
+      .catch((error) => {
+        if (!ativo) return;
+        if (error instanceof ApiError && error.status === 401) {
+          onSessaoExpirada();
+          return;
+        }
+        setErroProgresso("Não foi possível carregar o progresso do grupo.");
+      })
       .finally(() => { if (ativo) setCarregandoProgresso(false); });
     return () => { ativo = false; };
   }, [grupo.id, grupo.status]);
@@ -111,12 +120,19 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
     setErroObrigacoes("");
     if ((grupo.status !== "ATIVO" && grupo.status !== "ENCERRADO") || !progresso) return;
     const token = localStorage.getItem("toojunto_access_token");
-    if (!token) return;
+    if (!token) { onSessaoExpirada(); return; }
     let ativo = true;
     setCarregandoObrigacoes(true);
     buscarObrigacoesPagamento(grupo.id, progresso.ciclo_atual, token)
       .then((dados) => { if (ativo) setObrigacoes(dados); })
-      .catch(() => { if (ativo) setErroObrigacoes("Não foi possível carregar os pagamentos do ciclo."); })
+      .catch((error) => {
+        if (!ativo) return;
+        if (error instanceof ApiError && error.status === 401) {
+          onSessaoExpirada();
+          return;
+        }
+        setErroObrigacoes("Não foi possível carregar os pagamentos do ciclo.");
+      })
       .finally(() => { if (ativo) setCarregandoObrigacoes(false); });
     return () => { ativo = false; };
   }, [grupo.id, grupo.status, progresso]);
@@ -166,7 +182,7 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
   async function executarAcaoPagamento() {
     if (!progresso || !obrigacaoSelecionada || !acaoPagamento || envioPagamentoEmAndamento.current) return;
     const token = localStorage.getItem("toojunto_access_token");
-    if (!token) { setErroObrigacoes("Entre novamente para continuar."); return; }
+    if (!token) { onSessaoExpirada(); return; }
     envioPagamentoEmAndamento.current = true;
     setEnviandoPagamento(true);
     setFeedbackPix(null);
@@ -183,10 +199,18 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
         } else {
           setProgresso(await buscarProgressoGrupo(grupo.id, token));
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          onSessaoExpirada();
+          return;
+        }
         setErroObrigacoes("Ação registrada. Não foi possível atualizar a lista.");
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        onSessaoExpirada();
+        return;
+      }
       setErroObrigacoes(acaoPagamento.tipo === "informar"
         ? "Não foi possível informar o pagamento. Confira a situação e tente novamente."
         : "Não foi possível avaliar o pagamento. Tente novamente.");

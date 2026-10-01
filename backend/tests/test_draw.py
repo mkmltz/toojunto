@@ -79,10 +79,10 @@ def contexto():
         db.close()
 
 
-def criar_grupo(gestor):
+def criar_grupo(gestor, nome="Grupo para sorteio"):
     inicio = date.today() + timedelta(days=40)
     resposta = client.post("/groups", json={
-        "nome": "Grupo para sorteio", "valor_cota": "100.00",
+        "nome": nome, "valor_cota": "100.00",
         "quantidade_participantes": 3, "quantidade_ciclos": 3,
         "data_inicio": inicio.isoformat(),
     }, headers=headers(gestor))
@@ -90,9 +90,9 @@ def criar_grupo(gestor):
     return resposta.json(), inicio
 
 
-def preparar_grupo(usuarios):
+def preparar_grupo(usuarios, nome="Grupo para sorteio"):
     gestor, primeiro, segundo, _ = usuarios
-    grupo, inicio = criar_grupo(gestor)
+    grupo, inicio = criar_grupo(gestor, nome)
     convite = client.post(f"/groups/{grupo['id']}/invite", headers=headers(gestor))
     assert convite.status_code == 200
     for pessoa in (primeiro, segundo):
@@ -1027,6 +1027,38 @@ def test_us012_rejeicao_nova_declaracao_e_permissoes(contexto):
     assert client.post(confirmar, headers=headers(gestor)).json()["situacao"] == "CONFIRMADO"
     assert client.post(confirmar, headers=headers(gestor)).status_code == 409
     assert client.get(f"/groups/{grupo['id']}/cycles", headers=headers(gestor)).json()["ciclo_atual"] == 1
+
+
+def test_pagamento_id_de_outro_grupo_nao_pode_ser_avaliado(contexto):
+    gestor, pagador, _, _ = contexto
+    grupo_a, _ = preparar_grupo(contexto, "Grupo A isolado")
+    grupo_b, _ = preparar_grupo(contexto, "Grupo B isolado")
+    for grupo in (grupo_a, grupo_b):
+        assert client.post(
+            f"/groups/{grupo['id']}/draw", headers=headers(gestor)
+        ).status_code == 200
+
+    caminho_a = f"/groups/{grupo_a['id']}/cycles/1/payments"
+    caminho_b = f"/groups/{grupo_b['id']}/cycles/1/payments"
+    pagamento_a = client.post(caminho_a, headers=headers(pagador)).json()
+    pagamento_b = client.post(caminho_b, headers=headers(pagador)).json()
+
+    resposta = client.post(
+        f"{caminho_b}/{pagamento_a['pagamento_id']}/confirm",
+        headers=headers(gestor),
+    )
+
+    assert resposta.status_code == 404
+    db = SessionLocal()
+    try:
+        assert db.get(Pagamento, pagamento_a["pagamento_id"]).status == (
+            "AGUARDANDO_CONFIRMACAO"
+        )
+        assert db.get(Pagamento, pagamento_b["pagamento_id"]).status == (
+            "AGUARDANDO_CONFIRMACAO"
+        )
+    finally:
+        db.close()
 
 
 def test_us012_conclusao_avanco_e_encerramento(contexto):

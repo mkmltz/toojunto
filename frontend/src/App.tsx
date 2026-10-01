@@ -90,16 +90,29 @@ export default function App() {
   const [erroPix, setErroPix] = useState("");
   const [sucessoPix, setSucessoPix] = useState("");
 
-  function encerrarSessao(mensagem: string) {
-    localStorage.removeItem(CHAVE_TOKEN);
-    localStorage.removeItem(CHAVE_GRUPO);
+  function limparDadosSessao() {
     setUsuario(null);
     setGrupos([]);
     setGrupoSelecionado(null);
     setGrupoCriado(null);
+    setAvisoGrupo("");
+    setErroLista("");
     setQuantidadeNaoLidas(0);
     setNotificacoes([]);
+    setCarregandoNotificacoes(false);
+    setLendoNotificacaoId(null);
+    setErroNotificacoes("");
     setChavePix(null);
+    setCarregandoPix(false);
+    setSalvandoPix(false);
+    setErroPix("");
+    setSucessoPix("");
+  }
+
+  function encerrarSessao(mensagem: string) {
+    localStorage.removeItem(CHAVE_TOKEN);
+    localStorage.removeItem(CHAVE_GRUPO);
+    limparDadosSessao();
     setTela("login");
     setAviso(mensagem);
   }
@@ -136,7 +149,7 @@ export default function App() {
           if (conviteToken) {
             localStorage.removeItem(CHAVE_TOKEN);
             localStorage.removeItem(CHAVE_GRUPO);
-            setUsuario(null);
+            limparDadosSessao();
             setTela("convite");
           } else {
             encerrarSessao("Sua sessão terminou. Entre novamente para continuar.");
@@ -321,6 +334,7 @@ export default function App() {
     setEnviando(true);
     try {
       const resposta = await fazerLogin({ email, senha });
+      limparDadosSessao();
       localStorage.setItem(CHAVE_TOKEN, resposta.access_token);
       localStorage.removeItem(CHAVE_GRUPO);
       setUsuario(await buscarUsuarioAtual(resposta.access_token));
@@ -485,7 +499,7 @@ export default function App() {
     }
     const jwt = localStorage.getItem(CHAVE_TOKEN);
     if (!jwt) {
-      setUsuario(null);
+      limparDadosSessao();
       setTela("login");
       return;
     }
@@ -501,7 +515,7 @@ export default function App() {
       if (error instanceof ApiError && error.status === 401) {
         localStorage.removeItem(CHAVE_TOKEN);
         localStorage.removeItem(CHAVE_GRUPO);
-        setUsuario(null);
+        limparDadosSessao();
         setTela("login");
         setAviso("Sua sessão terminou. Entre novamente para continuar.");
       } else if (error instanceof ApiError && error.status === 404) {
@@ -563,7 +577,7 @@ export default function App() {
   if (usuario && tela === "criar-grupo") return areaAutenticada(<CreateGroupPage nomeUsuario={usuario.nome} carregando={enviando} onVoltar={voltarParaHome} onCriar={cadastrarGrupo} />);
   if (usuario && tela === "grupo-criado" && grupoCriado) return areaAutenticada(<GroupCreatedPage nomeUsuario={usuario.nome} grupo={grupoCriado} onVoltar={voltarParaHome} onVerGrupo={() => abrirGrupo(grupoCriado.id)} />);
   if (usuario && tela === "editar-grupo" && grupoSelecionado) return areaAutenticada(<EditGroupPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} carregando={enviando} onVoltar={() => setTela("detalhes")} onSalvar={atualizarGrupoSelecionado} />);
-  if (usuario && tela === "detalhes" && grupoSelecionado) return areaAutenticada(<GroupDetailsPage nomeUsuario={usuario.nome} usuarioId={usuario.id} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarParaHome} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} onObterConvite={obterConviteSelecionado} onPrepararSorteio={prepararSorteioSelecionado} onRealizarSorteio={realizarSorteioSelecionado} />);
+  if (usuario && tela === "detalhes" && grupoSelecionado) return areaAutenticada(<GroupDetailsPage nomeUsuario={usuario.nome} usuarioId={usuario.id} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarParaHome} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} onObterConvite={obterConviteSelecionado} onPrepararSorteio={prepararSorteioSelecionado} onRealizarSorteio={realizarSorteioSelecionado} onSessaoExpirada={() => encerrarSessao("Sua sessão terminou. Entre novamente para continuar.")} />);
   if (usuario) return areaAutenticada(<HomePage usuario={usuario} grupos={grupos} carregando={carregandoLista} erro={erroLista || avisoGrupo} onAbrirGrupo={abrirGrupo} onCriarGrupo={() => setTela("criar-grupo")} onAbrirChavePix={abrirChavePix} onRecarregar={carregarGrupos} onSair={sair} />);
   return <AuthLayout>{tela === "login" ? <LoginPage aviso={aviso} carregando={enviando} onEntrar={entrar} onCadastrar={() => { setAviso(""); setTela("cadastro"); }} onVoltarConvite={conviteToken ? () => setTela("convite") : undefined} /> : <RegisterPage carregando={enviando} onVoltar={() => setTela("login")} onCadastrar={cadastrar} />}</AuthLayout>;
 }

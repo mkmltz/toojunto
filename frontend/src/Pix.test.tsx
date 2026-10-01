@@ -82,6 +82,7 @@ describe("US-033 — Minha chave Pix", () => {
     fireEvent.change(campo, { target: { value: "  ana@example.com  " } });
     fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
     expect(await screen.findByText("Chave Pix cadastrada.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Salvar" })).toBeEnabled());
     expect(fetch).toHaveBeenLastCalledWith(
       "http://127.0.0.1:8000/auth/me/pix",
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ chave_pix: "ana@example.com" }) }),
@@ -91,6 +92,7 @@ describe("US-033 — Minha chave Pix", () => {
     fireEvent.change(campo, { target: { value: "+5571999999999" } });
     fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
     expect(await screen.findByText("Chave Pix alterada.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Salvar" })).toBeEnabled());
 
     vi.mocked(fetch).mockResolvedValueOnce(resposta({ chave_pix: null }));
     fireEvent.change(campo, { target: { value: "" } });
