@@ -10,7 +10,7 @@ class GrupoCriacao(BaseModel):
 
     nome: str = Field(min_length=2, max_length=120)
     valor_cota: Decimal = Field(gt=0, decimal_places=2)
-    quantidade_participantes: int = Field(ge=2)
+    quantidade_participantes: int = Field(ge=2, le=12)
     quantidade_ciclos: int = Field(ge=2)
     data_inicio: date
 
@@ -45,7 +45,7 @@ class GrupoAtualizacao(BaseModel):
 
     nome: str | None = Field(default=None, min_length=2, max_length=120)
     valor_cota: Decimal | None = Field(default=None, gt=0, decimal_places=2)
-    quantidade_participantes: int | None = Field(default=None, ge=2)
+    quantidade_participantes: int | None = Field(default=None, ge=2, le=12)
     data_inicio: date | None = None
 
     @field_validator("nome")

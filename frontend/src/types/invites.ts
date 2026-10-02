@@ -12,3 +12,8 @@ export interface AceiteConvite {
   participant_id: number;
   status: string;
 }
+
+export interface RecusaConvite {
+  group_id: number;
+  status: "RECUSADO";
+}

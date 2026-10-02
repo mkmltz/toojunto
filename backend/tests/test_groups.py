@@ -171,6 +171,56 @@ def test_participantes_e_ciclos_iguais_sao_aceitos(usuario):
     }
 
 
+def test_criacao_aceita_limite_de_12_e_preserva_ciclos_derivados(usuario):
+    response = client.post(
+        "/groups",
+        json=dados_grupo(
+            quantidade_participantes=12,
+            quantidade_ciclos=12,
+        ),
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["quantidade_participantes"] == 12
+    assert response.json()["quantidade_ciclos"] == 12
+
+
+@pytest.mark.parametrize("quantidade", [13, 1000])
+def test_criacao_rejeita_quantidade_acima_de_12_sem_persistir_grupo(
+    usuario,
+    quantidade,
+):
+    db = SessionLocal()
+    quantidade_antes = len(db.scalars(
+        select(Grupo).where(Grupo.gestor_id == usuario.id)
+    ).all())
+    db.close()
+
+    response = client.post(
+        "/groups",
+        json=dados_grupo(
+            quantidade_participantes=quantidade,
+            quantidade_ciclos=quantidade,
+        ),
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 422
+    assert any(
+        erro["loc"][-1] == "quantidade_participantes"
+        for erro in response.json()["detail"]
+    )
+    db = SessionLocal()
+    try:
+        quantidade_depois = len(db.scalars(
+            select(Grupo).where(Grupo.gestor_id == usuario.id)
+        ).all())
+        assert quantidade_depois == quantidade_antes
+    finally:
+        db.close()
+
+
 def test_criacao_persiste_gestor_como_participante_ativo(usuario):
     response = client.post(
         "/groups",
@@ -380,6 +430,47 @@ def test_gestor_edita_campos_e_backend_recalcula_derivados(usuario):
     assert response.json()["quantidade_ciclos"] == 8
     assert response.json()["data_inicio"] == nova_data.isoformat()
     assert response.json()["status"] == "RASCUNHO"
+
+
+def test_edicao_aceita_limite_de_12_e_recalcula_ciclos(usuario):
+    grupo = criar_grupo_via_api(usuario)
+
+    response = client.patch(
+        f"/groups/{grupo['id']}",
+        json={"quantidade_participantes": 12},
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["quantidade_participantes"] == 12
+    assert response.json()["quantidade_ciclos"] == 12
+
+
+@pytest.mark.parametrize("quantidade", [13, 1000])
+def test_edicao_rejeita_quantidade_acima_de_12_e_preserva_grupo(
+    usuario,
+    quantidade,
+):
+    grupo = criar_grupo_via_api(usuario)
+
+    response = client.patch(
+        f"/groups/{grupo['id']}",
+        json={"quantidade_participantes": quantidade},
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 422
+    assert any(
+        erro["loc"][-1] == "quantidade_participantes"
+        for erro in response.json()["detail"]
+    )
+    db = SessionLocal()
+    try:
+        grupo_persistido = db.get(Grupo, grupo["id"])
+        assert grupo_persistido.quantidade_participantes == 10
+        assert grupo_persistido.quantidade_ciclos == 10
+    finally:
+        db.close()
 
 
 def test_edicao_parcial_preserva_campos_nao_informados(usuario):

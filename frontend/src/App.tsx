@@ -14,11 +14,11 @@ import { PixPage } from "./pages/PixPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ApiError, atualizarChavePix, buscarChavePix, buscarUsuarioAtual, cadastrarUsuario, fazerLogin } from "./services/auth";
 import { atualizarGrupo, buscarGrupo, cancelarGrupo, criarGrupo, gerarOuObterConvite, listarGrupos, prepararSorteio, realizarSorteio } from "./services/groups";
-import { aceitarConvite, consultarConvite } from "./services/invites";
+import { aceitarConvite, consultarConvite, recusarConvite } from "./services/invites";
 import { contarNotificacoesNaoLidas, listarNotificacoes, marcarNotificacaoComoLida } from "./services/notifications";
 import type { Usuario } from "./types/auth";
 import type { ConviteGrupo, Grupo, GrupoAtualizacaoDados, GrupoCriacaoDados, GrupoDetalhe, GrupoLista } from "./types/groups";
-import type { AceiteConvite, ConvitePublico } from "./types/invites";
+import type { AceiteConvite, ConvitePublico, RecusaConvite } from "./types/invites";
 import type { NotificationItem } from "./types/notifications";
 
 const CHAVE_TOKEN = "toojunto_access_token";
@@ -74,6 +74,7 @@ export default function App() {
   const [erroLista, setErroLista] = useState("");
   const [convitePublico, setConvitePublico] = useState<ConvitePublico | null>(null);
   const [aceiteConvite, setAceiteConvite] = useState<AceiteConvite | null>(null);
+  const [recusaConvite, setRecusaConvite] = useState<RecusaConvite | null>(null);
   const [carregandoConvite, setCarregandoConvite] = useState(Boolean(conviteToken));
   const [aceitandoConvite, setAceitandoConvite] = useState(false);
   const [erroConvite, setErroConvite] = useState("");
@@ -190,6 +191,7 @@ export default function App() {
       setConviteToken(token);
       setConvitePublico(null);
       setAceiteConvite(null);
+      setRecusaConvite(null);
       setErroConvite("");
       setConviteIndisponivel(false);
       setAceitandoConvite(false);
@@ -533,12 +535,54 @@ export default function App() {
     }
   }
 
+  async function recusarParticipacaoPeloConvite() {
+    if (!conviteToken || aceitandoConvite) return;
+    if (!usuario) {
+      setAviso("Entre para registrar que não quer participar.");
+      setTela("login");
+      return;
+    }
+    const jwt = localStorage.getItem(CHAVE_TOKEN);
+    if (!jwt) {
+      limparDadosSessao();
+      setTela("login");
+      return;
+    }
+    setAceitandoConvite(true);
+    setErroConvite("");
+    const tokenSolicitado = conviteToken;
+    try {
+      const recusa = await recusarConvite(tokenSolicitado, jwt);
+      if (conviteTokenAtual.current !== tokenSolicitado) return;
+      setRecusaConvite(recusa);
+    } catch (error) {
+      if (conviteTokenAtual.current !== tokenSolicitado) return;
+      if (error instanceof ApiError && error.status === 401) {
+        localStorage.removeItem(CHAVE_TOKEN);
+        localStorage.removeItem(CHAVE_GRUPO);
+        limparDadosSessao();
+        setTela("login");
+        setAviso("Sua sessão terminou. Entre novamente para continuar.");
+      } else if (error instanceof ApiError && error.status === 404) {
+        setConvitePublico(null);
+        setConviteIndisponivel(true);
+      } else if (error instanceof ApiError && error.status === 409) {
+        setErroConvite(error.message);
+      } else {
+        setErroConvite("Não foi possível recusar o convite. Tente novamente.");
+      }
+    } finally {
+      if (conviteTokenAtual.current === tokenSolicitado) setAceitandoConvite(false);
+    }
+  }
+
   function abandonarConvite() {
     window.history.replaceState({}, "", "/");
     conviteTokenAtual.current = null;
     setConviteToken(null);
     setConvitePublico(null);
     setAceiteConvite(null);
+    setRecusaConvite(null);
     setErroConvite("");
     setConviteIndisponivel(false);
     setTela(usuario ? "home" : "login");
@@ -550,6 +594,7 @@ export default function App() {
     setConviteToken(null);
     setConvitePublico(null);
     setAceiteConvite(null);
+    setRecusaConvite(null);
     await abrirGrupo(grupoId);
   }
 
@@ -571,7 +616,7 @@ export default function App() {
   }
 
   if (carregandoSessao) return <main className="loading-screen">Carregando TooJunto...</main>;
-  if (tela === "convite" && conviteToken) return <InvitePage convite={convitePublico} aceite={aceiteConvite} carregando={carregandoConvite} aceitando={aceitandoConvite} erro={erroConvite} autenticado={Boolean(usuario)} indisponivel={conviteIndisponivel} onEntrar={entrarNoGrupoPeloConvite} onAgoraNao={abandonarConvite} onCriarConta={() => setTela("cadastro")} onTentarNovamente={() => setTentativaConvite((tentativa) => tentativa + 1)} onVerGrupo={verGrupoAceito} />;
+  if (tela === "convite" && conviteToken) return <InvitePage convite={convitePublico} aceite={aceiteConvite} recusa={recusaConvite} carregando={carregandoConvite} processando={aceitandoConvite} erro={erroConvite} autenticado={Boolean(usuario)} indisponivel={conviteIndisponivel} onEntrar={entrarNoGrupoPeloConvite} onRecusar={recusarParticipacaoPeloConvite} onAgoraNao={abandonarConvite} onTentarNovamente={() => setTentativaConvite((tentativa) => tentativa + 1)} onVerGrupo={verGrupoAceito} />;
   if (usuario && tela === "notificacoes") return areaAutenticada(<NotificationsPage nomeUsuario={usuario.nome} notificacoes={notificacoes} carregando={carregandoNotificacoes} lendoId={lendoNotificacaoId} erro={erroNotificacoes} onVoltar={voltarParaHome} onTentarNovamente={carregarNotificacoes} onSelecionar={selecionarNotificacao} />);
   if (usuario && tela === "pix") return areaAutenticada(<PixPage nomeUsuario={usuario.nome} chavePix={chavePix} carregando={carregandoPix} salvando={salvandoPix} erro={erroPix} sucesso={sucessoPix} onVoltar={voltarParaHome} onTentarNovamente={carregarChavePix} onSalvar={salvarChavePix} />);
   if (usuario && tela === "criar-grupo") return areaAutenticada(<CreateGroupPage nomeUsuario={usuario.nome} carregando={enviando} onVoltar={voltarParaHome} onCriar={cadastrarGrupo} />);

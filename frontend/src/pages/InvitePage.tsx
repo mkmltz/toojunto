@@ -1,5 +1,5 @@
 import { AuthLayout } from "../components/AuthLayout";
-import type { AceiteConvite, ConvitePublico } from "../types/invites";
+import type { AceiteConvite, ConvitePublico, RecusaConvite } from "../types/invites";
 
 
 const formatarValor = (valor: string) => Number(valor).toLocaleString(
@@ -15,14 +15,15 @@ const formatarData = (data: string) => new Intl.DateTimeFormat(
 interface InvitePageProps {
   convite: ConvitePublico | null;
   aceite: AceiteConvite | null;
+  recusa: RecusaConvite | null;
   carregando: boolean;
-  aceitando: boolean;
+  processando: boolean;
   erro: string;
   autenticado: boolean;
   indisponivel: boolean;
   onEntrar: () => void;
+  onRecusar: () => void;
   onAgoraNao: () => void;
-  onCriarConta: () => void;
   onTentarNovamente: () => void;
   onVerGrupo: (grupoId: number) => void;
 }
@@ -30,14 +31,15 @@ interface InvitePageProps {
 export function InvitePage({
   convite,
   aceite,
+  recusa,
   carregando,
-  aceitando,
+  processando,
   erro,
   autenticado,
   indisponivel,
   onEntrar,
+  onRecusar,
   onAgoraNao,
-  onCriarConta,
   onTentarNovamente,
   onVerGrupo,
 }: InvitePageProps) {
@@ -49,13 +51,17 @@ export function InvitePage({
     return <AuthLayout><section className="card invite-received center"><span className="badge">Tudo certo</span><h1>Você entrou no Grupo</h1><p>Agora você já pode acompanhar o Grupo no TooJunto.</p><button className="btn btn-primary" type="button" onClick={() => onVerGrupo(aceite.group_id)}>Ver Grupo</button></section></AuthLayout>;
   }
 
+  if (recusa) {
+    return <AuthLayout><section className="card invite-received center"><span className="badge">Decisão registrada</span><h1>Você recusou este convite</h1><p>Você não entrará neste grupo.</p><button className="btn btn-secondary" type="button" onClick={onAgoraNao}>Ir para o início</button></section></AuthLayout>;
+  }
+
   if (indisponivel) {
     return <AuthLayout><section className="card invite-received center"><h1>Convite indisponível</h1><p>Este convite não está mais disponível.</p><button className="btn btn-secondary" type="button" onClick={onAgoraNao}>Ir para o início</button></section></AuthLayout>;
   }
 
   if (!convite) {
-    return <AuthLayout><section className="card invite-received center"><h1>Não foi possível abrir o convite</h1><p className="alert error" role="alert">{erro || "Tente novamente."}</p><button className="btn btn-primary" type="button" onClick={onTentarNovamente}>Tentar novamente</button><button className="btn btn-secondary" type="button" onClick={onAgoraNao}>Agora não</button></section></AuthLayout>;
+    return <AuthLayout><section className="card invite-received center"><h1>Não foi possível abrir o convite</h1><p className="alert error" role="alert">{erro || "Tente novamente."}</p><button className="btn btn-primary" type="button" onClick={onTentarNovamente}>Tentar novamente</button><button className="btn btn-secondary" type="button" onClick={onAgoraNao}>Ir para o início</button></section></AuthLayout>;
   }
 
-  return <AuthLayout><section className="card invite-received"><span className="badge">Convite TooJunto</span><h1>Você foi convidado por {convite.manager_name}</h1><p>Participe de uma caixinha digital no grupo <strong>{convite.group_name}</strong>.</p><dl><div><dt>Cota</dt><dd>{formatarValor(convite.quota_value)}</dd></div><div><dt>Participantes</dt><dd>{convite.participant_limit}</dd></div><div><dt>Vagas disponíveis</dt><dd>{convite.available_slots}</dd></div><div><dt>Início</dt><dd>{formatarData(convite.start_date)}</dd></div></dl>{erro && <p className="alert error" role="alert">{erro}</p>}<button className="btn btn-primary" type="button" disabled={aceitando} onClick={onEntrar}>{aceitando ? "Entrando..." : "Entrar no Grupo"}</button>{!autenticado && <><p className="invite-guidance">Caso você ainda não tenha conta no TooJunto, crie sua conta para participar.</p><button className="btn btn-secondary" type="button" disabled={aceitando} onClick={onCriarConta}>Criar minha conta</button></>}<button className="btn btn-quiet" type="button" disabled={aceitando} onClick={onAgoraNao}>Agora não</button></section></AuthLayout>;
+  return <AuthLayout><section className="card invite-received"><span className="badge">Convite TooJunto</span><h1>Você foi convidado por {convite.manager_name}</h1><p>Participe de uma caixinha digital no grupo <strong>{convite.group_name}</strong>.</p><dl><div><dt>Cota</dt><dd>{formatarValor(convite.quota_value)}</dd></div><div><dt>Participantes</dt><dd>{convite.participant_limit}</dd></div><div><dt>Vagas disponíveis</dt><dd>{convite.available_slots}</dd></div><div><dt>Início</dt><dd>{formatarData(convite.start_date)}</dd></div></dl>{erro && <p className="alert error" role="alert">{erro}</p>}{!autenticado ? <><p className="invite-guidance">Entre na sua conta ou crie uma conta para aceitar ou recusar este convite.</p><button className="btn btn-primary" type="button" onClick={onEntrar}>Entrar para aceitar ou recusar</button></> : <><button className="btn btn-primary" type="button" disabled={processando} onClick={onEntrar}>{processando ? "Aguarde..." : "Aceitar convite"}</button><p className="invite-guidance">Se não quiser participar, sua recusa será definitiva.</p><button className="btn btn-danger" type="button" disabled={processando} onClick={onRecusar}>{processando ? "Registrando decisão..." : "Não quero participar"}</button></>}</section></AuthLayout>;
 }

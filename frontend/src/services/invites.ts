@@ -1,5 +1,5 @@
 import { requisicao } from "./auth";
-import type { AceiteConvite, ConvitePublico } from "../types/invites";
+import type { AceiteConvite, ConvitePublico, RecusaConvite } from "../types/invites";
 
 
 export const consultarConvite = (token: string) =>
@@ -7,6 +7,12 @@ export const consultarConvite = (token: string) =>
 
 export const aceitarConvite = (token: string, jwt: string) =>
   requisicao<AceiteConvite>(`/invites/${encodeURIComponent(token)}/accept`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${jwt}` },
+  });
+
+export const recusarConvite = (token: string, jwt: string) =>
+  requisicao<RecusaConvite>(`/invites/${encodeURIComponent(token)}/reject`, {
     method: "POST",
     headers: { Authorization: `Bearer ${jwt}` },
   });

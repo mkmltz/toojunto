@@ -25,6 +25,7 @@ function progressoSorteado() {
 
 function grupoEditavel(sobrescritas: Partial<GrupoDetalhe & GrupoLista> = {}): GrupoDetalhe & GrupoLista {
   return grupo({
+    data_inicio: "2026-11-01",
     vagas_disponiveis: 9,
     formacao: { quantidade_atual: 1, limite: 10, vagas_disponiveis: 9, participantes: [{ nome: "Ana Souza", papel: "GESTOR" }] },
     ...sobrescritas,
@@ -246,6 +247,51 @@ describe("US-003.1 e US-004", () => {
     expect(ultimaChamada[1]).toEqual(expect.objectContaining({ method: "POST" }));
     expect(JSON.parse(String(ultimaChamada[1]?.body))).toEqual(payload);
     expect(payload).not.toHaveProperty("valor_premio");
+  });
+
+  it("permite criar com 12 participantes e deriva 12 ciclos", async () => {
+    await autenticar();
+    fireEvent.click(screen.getByRole("button", { name: "Criar novo grupo" }));
+    preencherFormulario("Grupo Limite", "200.00", "12");
+    expect(screen.getByLabelText("Quantidade de participantes *")).toHaveAttribute("max", "12");
+    expect(screen.getByLabelText("Quantidade de ciclos")).toHaveValue(12);
+    vi.mocked(fetch).mockResolvedValueOnce(resposta(grupo({ nome: "Grupo Limite", quantidade_participantes: 12, quantidade_ciclos: 12 }), 201));
+
+    fireEvent.click(screen.getByRole("button", { name: "Criar grupo" }));
+
+    expect(await screen.findByText("Grupo criado com sucesso.")).toBeInTheDocument();
+    const chamadas = vi.mocked(fetch).mock.calls;
+    const [, opcoes] = chamadas[chamadas.length - 1];
+    expect(JSON.parse(String(opcoes?.body))).toEqual(expect.objectContaining({
+      quantidade_participantes: 12,
+      quantidade_ciclos: 12,
+    }));
+  });
+
+  it("bloqueia criação acima de 12 sem enviar payload", async () => {
+    await autenticar();
+    fireEvent.click(screen.getByRole("button", { name: "Criar novo grupo" }));
+    preencherFormulario("Grupo Grande", "200.00", "100");
+    const chamadasAntes = vi.mocked(fetch).mock.calls.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Criar grupo" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Máximo de 12 participantes.");
+    expect(screen.getByLabelText("Quantidade de ciclos")).toHaveValue(100);
+    expect(fetch).toHaveBeenCalledTimes(chamadasAntes);
+  });
+
+  it("bloqueia edição acima de 12 sem enviar payload", async () => {
+    await abrirDetalhes(grupoEditavel());
+    fireEvent.click(screen.getByRole("button", { name: "Editar grupo" }));
+    fireEvent.change(screen.getByLabelText("Quantidade de participantes *"), { target: { value: "1000" } });
+    const chamadasAntes = vi.mocked(fetch).mock.calls.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Máximo de 12 participantes.");
+    expect(screen.getByLabelText("Quantidade de participantes *")).toHaveAttribute("max", "12");
+    expect(fetch).toHaveBeenCalledTimes(chamadasAntes);
   });
 
   it("mostra erro específico de data e preserva o formulário", async () => {
@@ -1256,7 +1302,9 @@ describe("US-006", () => {
 
     expect(await screen.findByRole("heading", { name: "Você foi convidado por Carlos Lima" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "TooJunto" })).toHaveAttribute("src", "/brand/toojunto-logo-header.png");
-    expect(screen.getByText("Caso você ainda não tenha conta no TooJunto, crie sua conta para participar.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Entrar para aceitar ou recusar" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Não quero participar" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Agora não" })).not.toBeInTheDocument();
     expect(screen.getByText("Grupo Convidado")).toBeInTheDocument();
     expect(screen.getByText("R$ 150,00")).toBeInTheDocument();
     expect(screen.getByText("5")).toBeInTheDocument();
@@ -1287,13 +1335,15 @@ describe("US-006", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it("preserva a URL no Login e retorna ao convite sem aceitar automaticamente", async () => {
+  it("entra para decidir preservando a URL e sem aceitar ou recusar automaticamente", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(resposta(conviteRecebido));
     render(<App />);
     await screen.findByText("Grupo Convidado");
-    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Entrar para aceitar ou recusar" }));
     expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
     expect(window.location.pathname).toBe("/invites/token-recebido");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith("/accept") || String(url).endsWith("/reject"))).toBe(false);
 
     vi.mocked(fetch)
       .mockResolvedValueOnce(resposta({ access_token: "token-valido", token_type: "bearer" }))
@@ -1305,12 +1355,15 @@ describe("US-006", () => {
     expect(await screen.findByText("Grupo Convidado")).toBeInTheDocument();
     expect(window.location.pathname).toBe("/invites/token-recebido");
     expect(fetch).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole("button", { name: "Aceitar convite" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Não quero participar" })).toBeInTheDocument();
   });
 
   it("reutiliza o cadastro e preserva a URL até o Login", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(resposta(conviteRecebido));
     render(<App />);
     await screen.findByText("Grupo Convidado");
+    fireEvent.click(screen.getByRole("button", { name: "Entrar para aceitar ou recusar" }));
     fireEvent.click(screen.getByRole("button", { name: "Criar minha conta" }));
 
     fireEvent.change(screen.getByLabelText("Nome completo *"), { target: { value: "Nova Pessoa" } });
@@ -1335,7 +1388,9 @@ describe("US-006", () => {
     await screen.findByText("Grupo Convidado");
     vi.mocked(fetch).mockResolvedValueOnce(resposta({ group_id: 1, participant_id: 8, status: "ATIVO" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+    expect(screen.getByRole("button", { name: "Aceitar convite" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Não quero participar" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Aceitar convite" }));
 
     expect(await screen.findByRole("heading", { name: "Você entrou no Grupo" })).toBeInTheDocument();
     expect(fetch).toHaveBeenLastCalledWith(
@@ -1361,7 +1416,7 @@ describe("US-006", () => {
     await screen.findByText("Grupo Convidado");
     vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Credenciais inválidas." }, 401));
 
-    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Aceitar convite" }));
 
     expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
     expect(window.location.pathname).toBe("/invites/token-recebido");
@@ -1377,10 +1432,10 @@ describe("US-006", () => {
     await screen.findByText("Grupo Convidado");
     vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Este Grupo não possui vagas disponíveis." }, 409));
 
-    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Aceitar convite" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Este Grupo não possui vagas disponíveis.");
-    expect(screen.getByRole("button", { name: "Entrar no Grupo" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Aceitar convite" })).toBeEnabled();
   });
 
   it("torna o convite indisponível quando o aceite recebe 404", async () => {
@@ -1392,7 +1447,7 @@ describe("US-006", () => {
     await screen.findByText("Grupo Convidado");
     vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Convite não encontrado." }, 404));
 
-    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Aceitar convite" }));
 
     expect(await screen.findByText("Este convite não está mais disponível.")).toBeInTheDocument();
   });
@@ -1406,22 +1461,72 @@ describe("US-006", () => {
     await screen.findByText("Grupo Convidado");
     vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Falha interna" }, 500));
 
-    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Aceitar convite" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível entrar no Grupo. Tente novamente.");
-    expect(screen.getByRole("button", { name: "Entrar no Grupo" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Aceitar convite" })).toBeEnabled();
   });
 
-  it("Agora não sai do fluxo sem chamar o Backend novamente", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(resposta(conviteRecebido));
+  it("recusa explicitamente com token e JWT e remove a opção de aceite após sucesso", async () => {
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(resposta(usuario))
+      .mockResolvedValueOnce(resposta(conviteRecebido));
     render(<App />);
     await screen.findByText("Grupo Convidado");
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ group_id: 1, status: "RECUSADO" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Agora não" }));
+    fireEvent.click(screen.getByRole("button", { name: "Não quero participar" }));
 
-    expect(await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" })).toBeInTheDocument();
-    expect(window.location.pathname).toBe("/");
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("heading", { name: "Você recusou este convite" })).toBeInTheDocument();
+    expect(screen.getByText("Você não entrará neste grupo.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Aceitar convite" })).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenLastCalledWith(
+      "http://127.0.0.1:8000/invites/token-recebido/reject",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer token-valido" }),
+      }),
+    );
+  });
+
+  it("mostra erro da API de recusa sem apresentar falso sucesso", async () => {
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(resposta(usuario))
+      .mockResolvedValueOnce(resposta(conviteRecebido));
+    render(<App />);
+    await screen.findByText("Grupo Convidado");
+    vi.mocked(fetch).mockResolvedValueOnce(resposta({ detail: "Falha interna" }, 500));
+
+    fireEvent.click(screen.getByRole("button", { name: "Não quero participar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível recusar o convite. Tente novamente.");
+    expect(screen.queryByRole("heading", { name: "Você recusou este convite" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Não quero participar" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Aceitar convite" })).toBeEnabled();
+  });
+
+  it("bloqueia novo acionamento enquanto a recusa está em processamento", async () => {
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(resposta(usuario))
+      .mockResolvedValueOnce(resposta(conviteRecebido));
+    render(<App />);
+    await screen.findByText("Grupo Convidado");
+    let resolverRecusa!: (response: Response) => void;
+    vi.mocked(fetch).mockReturnValueOnce(new Promise((resolve) => { resolverRecusa = resolve; }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Não quero participar" }));
+
+    const botaoProcessando = await screen.findByRole("button", { name: "Registrando decisão..." });
+    expect(botaoProcessando).toBeDisabled();
+    fireEvent.click(botaoProcessando);
+    expect(fetch).toHaveBeenCalledTimes(3);
+
+    await act(async () => { resolverRecusa(resposta({ group_id: 1, status: "RECUSADO" })); });
+    expect(await screen.findByRole("heading", { name: "Você recusou este convite" })).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it("ignora resposta tardia depois que a URL do convite é abandonada", async () => {
@@ -1449,7 +1554,7 @@ describe("US-006", () => {
     vi.mocked(fetch).mockReturnValueOnce(new Promise((resolve) => {
       resolverAceite = resolve;
     }));
-    fireEvent.click(screen.getByRole("button", { name: "Entrar no Grupo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Aceitar convite" }));
 
     vi.mocked(fetch).mockResolvedValueOnce(resposta({
       ...conviteRecebido,
