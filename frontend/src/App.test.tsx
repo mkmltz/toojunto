@@ -45,7 +45,7 @@ async function autenticar(grupos: GrupoLista[] = []) {
   vi.mocked(fetch).mockResolvedValueOnce(resposta(usuario)).mockResolvedValueOnce(resposta(grupos));
   const app = render(<App />);
   await screen.findByRole("heading", { name: "Meus Grupos" });
-  await waitFor(() => expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups", expect.anything()));
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups?categoria=acompanhamento", expect.anything()));
   return app;
 }
 
@@ -70,7 +70,7 @@ describe("US-003.1 e US-004", () => {
   it("não mostra navegação autenticada no login nem no cadastro", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Bem-vindo ao TooJunto" });
-    expect(screen.getByText("TooJunto MVP 0.3")).toBeInTheDocument();
+    expect(screen.getByText("TooJunto MVP 0.4")).toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Navegação autenticada" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Criar minha conta" }));
@@ -97,7 +97,75 @@ describe("US-003.1 e US-004", () => {
 
   it("mostra estado vazio", async () => {
     await autenticar();
-    expect(await screen.findByRole("heading", { name: "Nenhum grupo ainda" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Nenhum grupo em acompanhamento" })).toBeInTheDocument();
+  });
+
+  it("separa Meus Grupos e Histórico e preserva a origem ao voltar dos detalhes", async () => {
+    const emAcompanhamento = grupo({ nome: "Grupo em andamento", status: "ATIVO" });
+    const encerrado = grupo({ id: 2, nome: "Grupo encerrado", status: "ENCERRADO" });
+    const cancelado = grupo({ id: 3, nome: "Grupo cancelado", status: "CANCELADO" });
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/auth/me")) return resposta(usuario);
+      if (url.endsWith("/notifications/unread-count")) return resposta({ count: 0 });
+      if (url.endsWith("/groups?categoria=acompanhamento")) return resposta([emAcompanhamento]);
+      if (url.endsWith("/groups?categoria=historico")) return resposta([encerrado, cancelado]);
+      if (url.endsWith("/groups/2")) return resposta(encerrado);
+      return resposta({}, 404);
+    });
+    localStorage.setItem("toojunto_access_token", "token-valido");
+
+    render(<App />);
+
+    expect(await screen.findByText("Grupo em andamento")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Grupos" })).toHaveAttribute("aria-current", "page");
+    const navegacao = screen.getByRole("navigation", { name: "Navegação autenticada" });
+    expect(within(navegacao).getAllByRole("button")).toHaveLength(4);
+    expect(within(navegacao).queryByRole("button", { name: "Sair" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sair" })).toBeInTheDocument();
+    expect(screen.queryByText("Grupo encerrado")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Histórico" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Carregando histórico...");
+    expect(await screen.findByRole("heading", { name: "Histórico" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Histórico" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByText("Grupo encerrado")).toBeInTheDocument();
+    expect(screen.getByText("Grupo cancelado")).toBeInTheDocument();
+    expect(screen.getByText("Grupo concluído")).toBeInTheDocument();
+    expect(screen.getByText("Cancelado")).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/groups?categoria=historico", expect.anything());
+
+    const cardEncerrado = screen.getByText("Grupo encerrado").closest("article")!;
+    fireEvent.click(within(cardEncerrado).getByRole("button", { name: "Ver grupo" }));
+    fireEvent.click(await screen.findByRole("button", { name: "← Voltar para o Histórico" }));
+
+    expect(await screen.findByRole("heading", { name: "Histórico" })).toBeInTheDocument();
+    await waitFor(() => expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/groups?categoria=historico")),
+    ).toHaveLength(2));
+  });
+
+  it("trata vazio e erro no Histórico e permite tentar novamente", async () => {
+    let tentativasHistorico = 0;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/auth/me")) return resposta(usuario);
+      if (url.endsWith("/notifications/unread-count")) return resposta({ count: 0 });
+      if (url.endsWith("/groups?categoria=acompanhamento")) return resposta([]);
+      if (url.endsWith("/groups?categoria=historico")) {
+        tentativasHistorico += 1;
+        return tentativasHistorico === 1 ? resposta({}, 500) : resposta([]);
+      }
+      return resposta({}, 404);
+    });
+    localStorage.setItem("toojunto_access_token", "token-valido");
+    render(<App />);
+    await screen.findByRole("heading", { name: "Meus Grupos" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Histórico" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível carregar o histórico.");
+    fireEvent.click(screen.getByRole("button", { name: "Tentar novamente" }));
+
+    expect(await screen.findByRole("heading", { name: "Nenhum grupo no histórico" })).toBeInTheDocument();
   });
 
   it("mantém uma única barra e espaço inferior com muitos grupos", async () => {
@@ -119,7 +187,7 @@ describe("US-003.1 e US-004", () => {
     expect(screen.getByText("01/10/2026")).toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Navegação principal" })).not.toBeInTheDocument();
     expect(screen.queryByText("Pagamentos")).not.toBeInTheDocument();
-    expect(screen.queryByText("Histórico")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Histórico" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "← Voltar para Meus Grupos" }));
     expect(await screen.findByRole("heading", { name: "Meus Grupos" })).toBeInTheDocument();
   });
@@ -359,7 +427,7 @@ describe("US-003.1 e US-004", () => {
         return resposta({ access_token: logins === 1 ? "token-a" : "token-b", token_type: "bearer" });
       }
       if (url.endsWith("/auth/me")) return resposta(authorization === "Bearer token-a" ? usuario : usuarioB);
-      if (url.endsWith("/groups")) return resposta(authorization === "Bearer token-a" ? [grupo({ nome: "Grupo privado A" })] : []);
+      if (url.endsWith("/groups?categoria=acompanhamento")) return resposta(authorization === "Bearer token-a" ? [grupo({ nome: "Grupo privado A" })] : []);
       if (url.endsWith("/notifications/unread-count")) return resposta({ count: 0 });
       if (url.endsWith("/auth/me/pix")) return resposta({ chave_pix: authorization === "Bearer token-a" ? "pix-privado-a" : null });
       throw new Error(`Requisição inesperada: ${url}`);
@@ -371,13 +439,13 @@ describe("US-003.1 e US-004", () => {
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
     expect(await screen.findByText("Grupo privado A")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Minha chave Pix" }));
-    expect(await screen.findByLabelText("Chave Pix")).toHaveValue("pix-privado-a");
+    await waitFor(() => expect(screen.getByLabelText("Chave Pix")).toHaveValue("pix-privado-a"));
     fireEvent.click(screen.getByRole("button", { name: "Sair" }));
 
     fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "bruna@example.com" } });
     fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "senha-segura" } });
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
-    expect(await screen.findByRole("heading", { name: "Nenhum grupo ainda" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Nenhum grupo em acompanhamento" })).toBeInTheDocument();
     expect(screen.queryByText("Grupo privado A")).not.toBeInTheDocument();
     expect(screen.queryByText("pix-privado-a")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Minha chave Pix" }));

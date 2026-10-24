@@ -7,13 +7,14 @@ import { EditGroupPage } from "./pages/EditGroupPage";
 import { GroupCreatedPage } from "./pages/GroupCreatedPage";
 import { GroupDetailsPage } from "./pages/GroupDetailsPage";
 import { HomePage } from "./pages/HomePage";
+import { HistoryPage } from "./pages/HistoryPage";
 import { InvitePage } from "./pages/InvitePage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { PixPage } from "./pages/PixPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ApiError, atualizarChavePix, buscarChavePix, buscarUsuarioAtual, cadastrarUsuario, fazerLogin } from "./services/auth";
-import { atualizarGrupo, buscarGrupo, cancelarGrupo, criarGrupo, gerarOuObterConvite, listarGrupos, prepararSorteio, realizarSorteio } from "./services/groups";
+import { atualizarGrupo, buscarGrupo, cancelarGrupo, criarGrupo, gerarOuObterConvite, listarGrupos, prepararSorteio, realizarSorteio, type CategoriaGrupo } from "./services/groups";
 import { aceitarConvite, consultarConvite, recusarConvite } from "./services/invites";
 import { contarNotificacoesNaoLidas, listarNotificacoes, marcarNotificacaoComoLida } from "./services/notifications";
 import type { Usuario } from "./types/auth";
@@ -23,7 +24,8 @@ import type { NotificationItem } from "./types/notifications";
 
 const CHAVE_TOKEN = "toojunto_access_token";
 const CHAVE_GRUPO = "toojunto_selected_group_id";
-type Tela = "login" | "cadastro" | "home" | "criar-grupo" | "grupo-criado" | "detalhes" | "editar-grupo" | "convite" | "notificacoes" | "pix";
+type Tela = "login" | "cadastro" | "home" | "historico" | "criar-grupo" | "grupo-criado" | "detalhes" | "editar-grupo" | "convite" | "notificacoes" | "pix";
+type OrigemDetalhes = "home" | "historico";
 
 function extrairTokenConvite(pathname: string): string | null {
   const correspondencia = pathname.match(/^\/invites\/([^/]+)\/?$/);
@@ -66,6 +68,7 @@ export default function App() {
   const [grupos, setGrupos] = useState<GrupoLista[]>([]);
   const [grupoSelecionado, setGrupoSelecionado] = useState<GrupoDetalhe | null>(null);
   const [grupoCriado, setGrupoCriado] = useState<Grupo | null>(null);
+  const [origemDetalhes, setOrigemDetalhes] = useState<OrigemDetalhes>("home");
   const [carregandoSessao, setCarregandoSessao] = useState(true);
   const [carregandoLista, setCarregandoLista] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -202,7 +205,8 @@ export default function App() {
   }, [usuario]);
 
   useEffect(() => {
-    if (usuario && tela === "home") carregarGrupos();
+    if (usuario && tela === "home") carregarGrupos("acompanhamento");
+    if (usuario && tela === "historico") carregarGrupos("historico");
   }, [usuario, tela]);
 
   useEffect(() => {
@@ -220,15 +224,15 @@ export default function App() {
     return () => { ativo = false; };
   }, [usuario]);
 
-  async function carregarGrupos() {
+  async function carregarGrupos(categoria: CategoriaGrupo) {
     const token = localStorage.getItem(CHAVE_TOKEN);
     if (!token) { encerrarSessao("Entre novamente para ver seus grupos."); return; }
     setCarregandoLista(true);
     setErroLista("");
-    try { setGrupos(await listarGrupos(token)); }
+    try { setGrupos(await listarGrupos(token, categoria)); }
     catch (error) {
       if (error instanceof ApiError && error.status === 401) { encerrarSessao("Sua sessão terminou. Entre novamente para continuar."); return; }
-      setErroLista("Não foi possível carregar seus grupos.");
+      setErroLista(categoria === "historico" ? "Não foi possível carregar o histórico." : "Não foi possível carregar seus grupos.");
     } finally { setCarregandoLista(false); }
   }
 
@@ -378,6 +382,7 @@ export default function App() {
     setErroLista("");
     try {
       const grupo = await buscarGrupo(grupoId, token);
+      setOrigemDetalhes(tela === "historico" ? "historico" : "home");
       setGrupoSelecionado(grupo);
       localStorage.setItem(CHAVE_GRUPO, String(grupo.id));
       setAvisoGrupo("");
@@ -603,16 +608,61 @@ export default function App() {
     setGrupoSelecionado(null);
     setGrupoCriado(null);
     setAvisoGrupo("");
+    setGrupos([]);
+    setCarregandoLista(true);
     setTela("home");
+  }
+
+  function abrirHistorico() {
+    if (tela === "historico") {
+      void carregarGrupos("historico");
+      return;
+    }
+    setErroLista("");
+    setGrupos([]);
+    setCarregandoLista(true);
+    setTela("historico");
+  }
+
+  function abrirMeusGrupos() {
+    if (tela === "home") {
+      void carregarGrupos("acompanhamento");
+      return;
+    }
+    voltarParaHome();
+  }
+
+  function abrirCriacaoGrupo() {
+    setGrupoSelecionado(null);
+    setGrupoCriado(null);
+    setAvisoGrupo("");
+    setTela("criar-grupo");
+  }
+
+  function voltarDosDetalhes() {
+    localStorage.removeItem(CHAVE_GRUPO);
+    setGrupoSelecionado(null);
+    setGrupoCriado(null);
+    setAvisoGrupo("");
+    setGrupos([]);
+    setCarregandoLista(true);
+    setTela(origemDetalhes);
   }
 
   function sair() { encerrarSessao("Você saiu da sua conta."); }
 
   function areaAutenticada(content: ReactNode) {
+    const ativo = tela === "home" ? "grupos"
+      : tela === "historico" ? "historico"
+        : tela === "criar-grupo" || tela === "grupo-criado" ? "criar"
+          : tela === "pix" ? "pix"
+            : tela === "detalhes" || tela === "editar-grupo" ? (origemDetalhes === "historico" ? "historico" : "grupos")
+              : null;
     return <NotificationNavigationProvider value={{
       unreadCount: quantidadeNaoLidas,
       onOpenNotifications: abrirNotificacoes,
-    }}><div className="authenticated-area">{content}<AuthenticatedBottomNav onCriarGrupo={() => setTela("criar-grupo")} onAbrirChavePix={abrirChavePix} onSair={sair} /></div></NotificationNavigationProvider>;
+      onLogout: sair,
+    }}><div className="authenticated-area">{content}<AuthenticatedBottomNav ativo={ativo} onAbrirGrupos={abrirMeusGrupos} onCriarGrupo={abrirCriacaoGrupo} onAbrirHistorico={abrirHistorico} onAbrirChavePix={abrirChavePix} /></div></NotificationNavigationProvider>;
   }
 
   if (carregandoSessao) return <main className="loading-screen">Carregando TooJunto...</main>;
@@ -622,7 +672,8 @@ export default function App() {
   if (usuario && tela === "criar-grupo") return areaAutenticada(<CreateGroupPage nomeUsuario={usuario.nome} carregando={enviando} onVoltar={voltarParaHome} onCriar={cadastrarGrupo} />);
   if (usuario && tela === "grupo-criado" && grupoCriado) return areaAutenticada(<GroupCreatedPage nomeUsuario={usuario.nome} grupo={grupoCriado} onVoltar={voltarParaHome} onVerGrupo={() => abrirGrupo(grupoCriado.id)} />);
   if (usuario && tela === "editar-grupo" && grupoSelecionado) return areaAutenticada(<EditGroupPage nomeUsuario={usuario.nome} grupo={grupoSelecionado} carregando={enviando} onVoltar={() => setTela("detalhes")} onSalvar={atualizarGrupoSelecionado} />);
-  if (usuario && tela === "detalhes" && grupoSelecionado) return areaAutenticada(<GroupDetailsPage nomeUsuario={usuario.nome} usuarioId={usuario.id} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarParaHome} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} onObterConvite={obterConviteSelecionado} onPrepararSorteio={prepararSorteioSelecionado} onRealizarSorteio={realizarSorteioSelecionado} onSessaoExpirada={() => encerrarSessao("Sua sessão terminou. Entre novamente para continuar.")} />);
-  if (usuario) return areaAutenticada(<HomePage usuario={usuario} grupos={grupos} carregando={carregandoLista} erro={erroLista || avisoGrupo} onAbrirGrupo={abrirGrupo} onCriarGrupo={() => setTela("criar-grupo")} onAbrirChavePix={abrirChavePix} onRecarregar={carregarGrupos} onSair={sair} />);
+  if (usuario && tela === "detalhes" && grupoSelecionado) return areaAutenticada(<GroupDetailsPage nomeUsuario={usuario.nome} usuarioId={usuario.id} grupo={grupoSelecionado} aviso={avisoGrupo} carregando={enviando} onVoltar={voltarDosDetalhes} rotuloVoltar={origemDetalhes === "historico" ? "o Histórico" : "Meus Grupos"} onEditar={() => { setAvisoGrupo(""); setTela("editar-grupo"); }} onCancelar={cancelarGrupoSelecionado} onObterConvite={obterConviteSelecionado} onPrepararSorteio={prepararSorteioSelecionado} onRealizarSorteio={realizarSorteioSelecionado} onSessaoExpirada={() => encerrarSessao("Sua sessão terminou. Entre novamente para continuar.")} />);
+  if (usuario && tela === "historico") return areaAutenticada(<HistoryPage nomeUsuario={usuario.nome} grupos={grupos} carregando={carregandoLista} erro={erroLista} onAbrirGrupo={abrirGrupo} onRecarregar={() => carregarGrupos("historico")} onVoltar={voltarParaHome} />);
+  if (usuario) return areaAutenticada(<HomePage usuario={usuario} grupos={grupos} carregando={carregandoLista} erro={erroLista || avisoGrupo} onAbrirGrupo={abrirGrupo} onRecarregar={() => carregarGrupos("acompanhamento")} />);
   return <AuthLayout>{tela === "login" ? <LoginPage aviso={aviso} carregando={enviando} onEntrar={entrar} onCadastrar={() => { setAviso(""); setTela("cadastro"); }} onVoltarConvite={conviteToken ? () => setTela("convite") : undefined} /> : <RegisterPage carregando={enviando} onVoltar={() => setTela("login")} onCadastrar={cadastrar} />}</AuthLayout>;
 }

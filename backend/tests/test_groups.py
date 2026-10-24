@@ -1,13 +1,15 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from jose import jwt
 from sqlalchemy import delete, select
 
-from app.auth.security import criar_token_acesso, gerar_hash_senha
+from app.auth.security import ALGORITHM, criar_token_acesso, gerar_hash_senha
+from app.config import settings
 from app.db import SessionLocal
 from app.groups.schemas import GrupoAtualizacao, GrupoCriacao
 from app.groups.service import atualizar_grupo, cancelar_grupo, criar_grupo
@@ -1011,6 +1013,245 @@ def test_listagem_ordena_por_criacao_e_id_decrescentes(usuario):
     ]
 
 
+@pytest.mark.parametrize(
+    ("categoria", "estados_esperados"),
+    [
+        ("acompanhamento", {"RASCUNHO", "SORTEIO", "ATIVO"}),
+        ("historico", {"ENCERRADO", "CANCELADO"}),
+    ],
+)
+def test_listagem_filtra_grupos_por_categoria(
+    usuario,
+    categoria,
+    estados_esperados,
+):
+    grupos = [
+        criar_grupo_via_api(usuario, nome=f"Grupo {estado}")
+        for estado in ("RASCUNHO", "SORTEIO", "ATIVO", "ENCERRADO", "CANCELADO")
+    ]
+    db = SessionLocal()
+    try:
+        for grupo, estado in zip(
+            grupos,
+            ("RASCUNHO", "SORTEIO", "ATIVO", "ENCERRADO", "CANCELADO"),
+        ):
+            db.get(Grupo, grupo["id"]).status = estado
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get(
+        f"/groups?categoria={categoria}",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert {grupo["status"] for grupo in response.json()} == estados_esperados
+    assert all(
+        set(grupo) == {
+            "id", "nome", "gestor_id", "valor_cota", "valor_premio",
+            "quantidade_participantes", "quantidade_ciclos", "data_inicio",
+            "status", "created_at", "papel", "gestor_nome",
+            "vagas_disponiveis",
+        }
+        for grupo in response.json()
+    )
+
+
+def test_listagem_sem_categoria_preserva_todos_os_status(usuario):
+    grupos = [
+        criar_grupo_via_api(usuario, nome=f"Grupo sem filtro {indice}")
+        for indice in range(5)
+    ]
+    estados = ("RASCUNHO", "SORTEIO", "ATIVO", "ENCERRADO", "CANCELADO")
+    db = SessionLocal()
+    try:
+        for grupo, estado in zip(grupos, estados):
+            db.get(Grupo, grupo["id"]).status = estado
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get("/groups", headers=cabecalho_autorizacao(usuario))
+
+    assert response.status_code == 200
+    assert {grupo["status"] for grupo in response.json()} == set(estados)
+
+
+def test_listagem_rejeita_categoria_invalida(usuario):
+    response = client.get(
+        "/groups?categoria=invalida",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 422
+
+
+def test_listagem_retorna_lista_vazia_sem_grupos_na_categoria(usuario):
+    criar_grupo_via_api(usuario)
+
+    response = client.get(
+        "/groups?categoria=historico",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_listagem_filtrada_preserva_ordenacao(usuario):
+    primeiro = criar_grupo_via_api(usuario, nome="Historico primeiro")
+    segundo = criar_grupo_via_api(usuario, nome="Historico segundo")
+    db = SessionLocal()
+    try:
+        grupo_primeiro = db.get(Grupo, primeiro["id"])
+        grupo_segundo = db.get(Grupo, segundo["id"])
+        grupo_primeiro.status = "ENCERRADO"
+        grupo_segundo.status = "CANCELADO"
+        grupo_segundo.created_at = grupo_primeiro.created_at
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get(
+        "/groups?categoria=historico",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert [grupo["id"] for grupo in response.json()] == [
+        segundo["id"],
+        primeiro["id"],
+    ]
+
+
+def test_filtros_preservam_isolamento_e_identidade_exclusiva_do_jwt(
+    usuario,
+    outro_usuario,
+):
+    grupo_usuario = criar_grupo_via_api(usuario, nome="Grupo autorizado")
+    grupo_terceiro = criar_grupo_via_api(
+        outro_usuario,
+        nome="Grupo de terceiro",
+    )
+
+    response = client.get(
+        f"/groups?categoria=acompanhamento&usuario_id={outro_usuario.id}",
+        headers=cabecalho_autorizacao(usuario),
+    )
+
+    assert response.status_code == 200
+    assert [grupo["id"] for grupo in response.json()] == [grupo_usuario["id"]]
+    assert grupo_terceiro["id"] not in {
+        grupo["id"] for grupo in response.json()
+    }
+
+
+@pytest.mark.parametrize("estado", ["ENCERRADO", "CANCELADO"])
+def test_historico_e_detalhe_negam_usuario_externo(
+    usuario,
+    outro_usuario,
+    estado,
+):
+    grupo = criar_grupo_via_api(usuario, nome=f"Historico privado {estado}")
+    db = SessionLocal()
+    try:
+        db.get(Grupo, grupo["id"]).status = estado
+        db.commit()
+    finally:
+        db.close()
+
+    historico = client.get(
+        "/groups?categoria=historico",
+        headers=cabecalho_autorizacao(outro_usuario),
+    )
+    detalhe = client.get(
+        f"/groups/{grupo['id']}",
+        headers=cabecalho_autorizacao(outro_usuario),
+    )
+
+    assert historico.status_code == 200
+    assert historico.json() == []
+    assert detalhe.status_code == 404
+
+
+def test_historico_exige_participacao_ativa_para_lista_e_detalhe(
+    usuario,
+    outro_usuario,
+):
+    grupo = criar_grupo_via_api(usuario, nome="Historico inativo")
+    associar_usuario_ao_grupo(
+        outro_usuario,
+        grupo["id"],
+        status_participante="INATIVO",
+    )
+    db = SessionLocal()
+    try:
+        db.get(Grupo, grupo["id"]).status = "ENCERRADO"
+        db.commit()
+    finally:
+        db.close()
+
+    historico = client.get(
+        "/groups?categoria=historico",
+        headers=cabecalho_autorizacao(outro_usuario),
+    )
+    detalhe = client.get(
+        f"/groups/{grupo['id']}",
+        headers=cabecalho_autorizacao(outro_usuario),
+    )
+
+    assert historico.status_code == 200
+    assert historico.json() == []
+    assert detalhe.status_code == 404
+
+
+@pytest.mark.parametrize("estado", ["ENCERRADO", "CANCELADO"])
+def test_participante_ativo_acessa_grupo_historico_na_lista_e_no_detalhe(
+    usuario,
+    outro_usuario,
+    estado,
+):
+    grupo = criar_grupo_via_api(
+        usuario,
+        nome=f"Historico compartilhado {estado}",
+        quantidade_participantes=2,
+        quantidade_ciclos=2,
+    )
+    associar_usuario_ao_grupo(outro_usuario, grupo["id"])
+    db = SessionLocal()
+    try:
+        db.get(Grupo, grupo["id"]).status = estado
+        if estado == "ENCERRADO":
+            participantes = db.scalars(
+                select(Participante)
+                .where(Participante.grupo_id == grupo["id"])
+                .order_by(Participante.id)
+            ).all()
+            for ordem, participante in enumerate(participantes, start=1):
+                participante.ordem_sorteio = ordem
+        db.commit()
+    finally:
+        db.close()
+
+    historico = client.get(
+        "/groups?categoria=historico",
+        headers=cabecalho_autorizacao(outro_usuario),
+    )
+    detalhe = client.get(
+        f"/groups/{grupo['id']}",
+        headers=cabecalho_autorizacao(outro_usuario),
+    )
+
+    assert historico.status_code == 200
+    assert [(item["id"], item["status"], item["papel"]) for item in historico.json()] == [
+        (grupo["id"], estado, "PARTICIPANTE")
+    ]
+    assert detalhe.status_code == 200
+    assert detalhe.json()["id"] == grupo["id"]
+    assert detalhe.json()["papel"] == "PARTICIPANTE"
+
+
 def test_detalhe_retorna_papel_gestor_para_proprietario(usuario):
     grupo = criar_grupo_via_api(usuario)
 
@@ -1150,18 +1391,64 @@ def test_detalhe_retorna_404_para_grupo_inexistente(usuario):
     assert response.status_code == 404
 
 
-@pytest.mark.parametrize("caminho", ["/groups", "/groups/1"])
+@pytest.mark.parametrize(
+    "caminho",
+    [
+        "/groups",
+        "/groups?categoria=acompanhamento",
+        "/groups?categoria=historico",
+        "/groups?categoria=invalida",
+        "/groups/1",
+    ],
+)
 def test_consultas_de_grupo_exigem_autenticacao(caminho):
     response = client.get(caminho)
 
     assert response.status_code == 401
 
 
-@pytest.mark.parametrize("caminho", ["/groups", "/groups/1"])
+@pytest.mark.parametrize(
+    "caminho",
+    [
+        "/groups",
+        "/groups?categoria=acompanhamento",
+        "/groups?categoria=historico",
+        "/groups?categoria=invalida",
+        "/groups/1",
+    ],
+)
 def test_consultas_de_grupo_rejeitam_token_invalido(caminho):
     response = client.get(
         caminho,
         headers={"Authorization": "Bearer token-invalido"},
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "caminho",
+    [
+        "/groups",
+        "/groups?categoria=acompanhamento",
+        "/groups?categoria=historico",
+        "/groups?categoria=invalida",
+        "/groups/1",
+    ],
+)
+def test_consultas_de_grupo_rejeitam_token_expirado(usuario, caminho):
+    token_expirado = jwt.encode(
+        {
+            "sub": str(usuario.id),
+            "exp": datetime.now(timezone.utc) - timedelta(minutes=1),
+        },
+        settings.jwt_secret,
+        algorithm=ALGORITHM,
+    )
+
+    response = client.get(
+        caminho,
+        headers={"Authorization": f"Bearer {token_expirado}"},
     )
 
     assert response.status_code == 401

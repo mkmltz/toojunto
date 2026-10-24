@@ -8,7 +8,9 @@ export const criarGrupo = (dados: GrupoCriacaoDados, token: string) =>
     body: JSON.stringify(dados),
   });
 
-export const listarGrupos = (token: string) => requisicao<GrupoLista[]>("/groups", {
+export type CategoriaGrupo = "acompanhamento" | "historico";
+
+export const listarGrupos = (token: string, categoria: CategoriaGrupo) => requisicao<GrupoLista[]>(`/groups?categoria=${categoria}`, {
   headers: { Authorization: `Bearer ${token}` },
 });
 

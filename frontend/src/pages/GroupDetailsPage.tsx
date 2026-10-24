@@ -25,6 +25,7 @@ interface GroupDetailsPageProps {
   aviso: string;
   carregando: boolean;
   onVoltar: () => void;
+  rotuloVoltar?: string;
   onEditar: () => void;
   onCancelar: () => Promise<void>;
   onObterConvite: () => Promise<ConviteGrupo>;
@@ -33,7 +34,7 @@ interface GroupDetailsPageProps {
   onSessaoExpirada: () => void;
 }
 
-export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carregando, onVoltar, onEditar, onCancelar, onObterConvite, onPrepararSorteio, onRealizarSorteio, onSessaoExpirada }: GroupDetailsPageProps) {
+export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carregando, onVoltar, rotuloVoltar = "Meus Grupos", onEditar, onCancelar, onObterConvite, onPrepararSorteio, onRealizarSorteio, onSessaoExpirada }: GroupDetailsPageProps) {
   const [confirmando, setConfirmando] = useState(false);
   const [confirmandoSorteio, setConfirmandoSorteio] = useState(false);
   const [executandoSorteio, setExecutandoSorteio] = useState(false);
@@ -311,7 +312,7 @@ export function GroupDetailsPage({ nomeUsuario, usuarioId, grupo, aviso, carrega
   }
 
   return <AppShell nome={nomeUsuario}>
-    <button className="back" type="button" onClick={onVoltar}>← Voltar para Meus Grupos</button>
+    <button className="back" type="button" onClick={onVoltar}>← Voltar para {rotuloVoltar}</button>
     <section className="screen-title"><div><span className={`badge ${grupoConcluido ? "group-situation complete" : grupo.status === "ATIVO" ? "group-situation drawn" : grupo.status === "CANCELADO" ? "danger" : ""}`}>{grupoConcluido ? "Grupo concluído" : grupo.status === "ATIVO" ? "Em andamento" : grupo.status === "SORTEIO" ? "Pronto para sorteio" : grupo.status}</span><h1 className="details-title">{grupo.nome}</h1><p className="subtitle">Gestor: {grupo.gestor_nome}<br /><span>Seu papel: {grupo.papel === "GESTOR" ? "Gestor" : "Participante"}</span></p></div></section>
     {aviso && <p className="alert success" role="status">{aviso}</p>}
     {erro && (!confirmandoSorteio || !podePreparar) && <p className="alert error" role="alert">{erro}</p>}

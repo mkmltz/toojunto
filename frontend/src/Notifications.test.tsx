@@ -58,7 +58,7 @@ function mockApi({
         : resposta({ ...target, status: "LIDA", lida_em: "2026-09-29T15:00:00" });
     }
     if (url.endsWith("/groups/7")) return resposta(grupo);
-    if (url.endsWith("/groups")) return resposta([]);
+    if (url.endsWith("/groups?categoria=acompanhamento")) return resposta([]);
     throw new Error(`Requisição inesperada: ${url}`);
   }));
 }

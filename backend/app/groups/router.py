@@ -5,6 +5,7 @@ from ..auth.dependencies import get_current_user
 from ..db import get_db
 from ..models import Usuario
 from .schemas import (
+    CategoriaGrupo,
     ConviteResposta,
     GrupoAtualizacao,
     GrupoCriacao,
@@ -42,10 +43,11 @@ router = APIRouter(
     response_model=list[GrupoListaResposta],
 )
 def listar_grupos(
+    categoria: CategoriaGrupo | None = None,
     usuario: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return listar_grupos_do_usuario(usuario, db)
+    return listar_grupos_do_usuario(usuario, db, categoria)
 
 
 @router.get(

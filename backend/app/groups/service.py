@@ -26,6 +26,7 @@ from ..notifications.events import (
     notificar_sorteio_realizado,
 )
 from .schemas import (
+    CategoriaGrupo,
     ConviteResposta,
     GrupoAtualizacao,
     GrupoComPapelResposta,
@@ -143,6 +144,7 @@ def _grupo_com_papel(
 def listar_grupos_do_usuario(
     usuario: Usuario,
     db: Session,
+    categoria: CategoriaGrupo | None = None,
 ) -> list[GrupoListaResposta]:
     participacao_ativa = (
         select(Participante.id)
@@ -161,7 +163,7 @@ def listar_grupos_do_usuario(
         .group_by(Participante.grupo_id)
         .subquery()
     )
-    grupos = db.execute(
+    consulta = (
         select(
             Grupo,
             Usuario.nome,
@@ -171,7 +173,14 @@ def listar_grupos_do_usuario(
         .outerjoin(ocupacao, ocupacao.c.grupo_id == Grupo.id)
         .where(participacao_ativa)
         .order_by(Grupo.created_at.desc(), Grupo.id.desc())
-    ).all()
+    )
+    if categoria == CategoriaGrupo.ACOMPANHAMENTO:
+        consulta = consulta.where(
+            Grupo.status.in_(("RASCUNHO", "SORTEIO", "ATIVO"))
+        )
+    elif categoria == CategoriaGrupo.HISTORICO:
+        consulta = consulta.where(Grupo.status.in_(("ENCERRADO", "CANCELADO")))
+    grupos = db.execute(consulta).all()
     return [
         GrupoListaResposta(
             **_grupo_com_papel(grupo, usuario, gestor_nome).model_dump(),

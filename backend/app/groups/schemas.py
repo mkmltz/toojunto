@@ -103,6 +103,11 @@ class PapelGrupo(str, Enum):
     PARTICIPANTE = "PARTICIPANTE"
 
 
+class CategoriaGrupo(str, Enum):
+    ACOMPANHAMENTO = "acompanhamento"
+    HISTORICO = "historico"
+
+
 class GrupoComPapelResposta(GrupoResposta):
     papel: PapelGrupo
     gestor_nome: str

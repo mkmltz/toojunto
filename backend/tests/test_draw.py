@@ -1095,6 +1095,21 @@ def test_us012_conclusao_avanco_e_encerramento(contexto):
                 assert all(c["situacao"] == "CONCLUIDO" for c in progresso["ciclos"])
                 assert client.get(f"/groups/{grupo['id']}", headers=headers(pagador)).json()["status"] == "ENCERRADO"
         assert client.post(caminho, headers=headers(usuarios_por_nome[obrigacoes[0]["pagador_nome"]])).status_code == 409
+
+    acompanhamento = client.get(
+        "/groups?categoria=acompanhamento",
+        headers=headers(gestor),
+    )
+    historico = client.get(
+        "/groups?categoria=historico",
+        headers=headers(gestor),
+    )
+    assert acompanhamento.status_code == 200
+    assert grupo["id"] not in {item["id"] for item in acompanhamento.json()}
+    assert historico.status_code == 200
+    assert [(item["id"], item["status"]) for item in historico.json()] == [
+        (grupo["id"], "ENCERRADO")
+    ]
     db = SessionLocal()
     try:
         ciclos = db.scalars(select(Ciclo).where(Ciclo.grupo_id == grupo["id"]).order_by(Ciclo.numero)).all()
